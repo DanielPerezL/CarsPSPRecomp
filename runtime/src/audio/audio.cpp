@@ -32,6 +32,11 @@ FILE *g_record = nullptr;  // --record-audio: copia de la mezcla final en WAV
 uint32_t g_recorded = 0;
 
 void finish_record() {
+    // El callback de SDL corre en otro hilo: hay que pararlo antes de que se destruyan los estáticos.
+    if (g_dev) {
+        SDL_CloseAudioDevice(g_dev);
+        g_dev = 0;
+    }
     if (!g_record) return;
     uint32_t data = g_recorded, riff = 36 + data, rate = RATE, brate = RATE * 4, fmt = 16;
     uint16_t pcm = 1, ch = 2, align = 4, bits = 16;
@@ -104,10 +109,8 @@ void output(Ctx *c, int ch, int vl, int vr, uint32_t buf, bool blocking) {
 
 void audio_init(bool enabled, const std::string &record_path) {
     if (!enabled) return;
-    if (!record_path.empty() && (g_record = fopen(record_path.c_str(), "wb"))) {
-        fseek(g_record, 44, SEEK_SET);
-        atexit(finish_record);
-    }
+    if (!record_path.empty() && (g_record = fopen(record_path.c_str(), "wb"))) fseek(g_record, 44, SEEK_SET);
+    atexit(finish_record);
     if (SDL_InitSubSystem(SDL_INIT_AUDIO) != 0) {
         LOGW("audio", "sin audio: %s", SDL_GetError());
         return;

@@ -14,6 +14,8 @@ struct RendererConfig {
     int scale = 4;            // resolución interna = 480x272 * scale (4 -> 1920x1088)
     bool interpolate = true;  // fotogramas intermedios entre los fotogramas lógicos del juego
     int max_fps = 0;          // límite de presentación con interpolación (0 = frecuencia del monitor)
+    std::string textures_dir = "textures";  // sustituciones <hash>.png
+    std::string dump_dir;                   // si no está vacío, vuelca aquí las texturas originales
 };
 
 bool renderer_init(const RendererConfig &cfg);

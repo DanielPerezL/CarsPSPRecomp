@@ -13,6 +13,7 @@
 #include "gl_funcs.h"
 #include "renderer.h"
 #include "texture.h"
+#include "texture_replace.h"
 
 namespace {
 
@@ -165,6 +166,7 @@ struct Snap {
     GLuint tex = 0;
     float tex_w = 1, tex_h = 1;
     bool tex_flip = false;
+    bool tex_hd = false;
 
     uint32_t arg(int c) const { return cmd[c] & 0xFFFFFF; }
     bool through() const { return cmd[0x12] >> 23 & 1; }
@@ -206,6 +208,7 @@ struct CachedTex {
     GLuint tex = 0;
     uint64_t hash = 0;
     int w = 0, h = 0;
+    bool replaced = false;  // sustituida por una versión de mayor resolución (con mipmaps)
 };
 
 RendererConfig g_cfg;
@@ -339,16 +342,24 @@ void resolve_texture(Snap &s) {
     CachedTex &ct = g_textures[key];
     uint64_t h = texture_hash(p, g_ge.clut);
     if (!ct.tex || ct.hash != h) {
-        texture_decode(p, g_ge.clut, g_rgba);
+        int w = p.w, hh = p.h;
+        bool replaced = texrep_load(h, g_rgba, w, hh);
+        if (!replaced) {
+            texture_decode(p, g_ge.clut, g_rgba);
+            texrep_dump(h, g_rgba.data(), p.w, p.h);
+        }
         if (!ct.tex) glGenTextures(1, &ct.tex);
         glBindTexture(GL_TEXTURE_2D, ct.tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, p.w, p.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_rgba.data());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, hh, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_rgba.data());
+        if (replaced) glGenerateMipmap(GL_TEXTURE_2D);
         ct.hash = h;
-        ct.w = p.w;
-        ct.h = p.h;
+        ct.w = w;
+        ct.h = hh;
+        ct.replaced = replaced;
     }
     s.tex = ct.tex;
+    s.tex_hd = ct.replaced;
     s.tex_flip = false;
     s.tex_w = (float)p.w;
     s.tex_h = (float)p.h;
@@ -485,8 +496,9 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g.tex);
             if (!g.tex_flip) {
-                bool linear = g.arg(0xC6) >> 8 & 1;
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+                bool linear = (g.arg(0xC6) >> 8 & 1) || g.tex_hd;
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                                g.tex_hd ? GL_LINEAR_MIPMAP_LINEAR : linear ? GL_LINEAR : GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (g.arg(0xC7) & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
                 glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (g.arg(0xC7) >> 8 & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
@@ -665,6 +677,7 @@ bool renderer_init(const RendererConfig &cfg) {
     glVertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GpuVertex), (void *)offsetof(GpuVertex, col));
     glGenTextures(1, &g_cpu_tex);
     glGenFramebuffers(1, &g_cpu_fbo);
+    texrep_init(cfg.textures_dir, cfg.dump_dir);
 
     int hz = cfg.max_fps;
     if (cfg.interpolate && hz <= 0) {

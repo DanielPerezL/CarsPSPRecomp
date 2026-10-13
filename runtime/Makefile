@@ -30,7 +30,7 @@ $(OBJ)/gen/%.o: $(GEN)/%.c include/recomp.h
 	@mkdir -p $(dir $@)
 	$(CC) $(GENFLAGS) -c $< -o $@
 
-$(OBJ)/rt/%.o: src/%.cpp $(wildcard src/*.h src/gpu/*.h src/platform/*.h) include/recomp.h
+$(OBJ)/rt/%.o: src/%.cpp $(wildcard src/*.h src/*/*.h) include/recomp.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 

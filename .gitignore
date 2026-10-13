@@ -6,8 +6,11 @@ decrypted/
 dumps/
 ghidra/
 build/
+# Texturas volcadas del juego y sus versiones reescaladas
+/textures/
+/texdump/
 
 # Herramientas de terceros clonadas/compiladas localmente
-third_party/
+/third_party/
 
 __pycache__/
