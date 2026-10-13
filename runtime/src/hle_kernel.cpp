@@ -34,7 +34,11 @@ HLE(sceKernelDeleteThread) {
 
 HLE(sceKernelGetThreadId) { RET(thread_current()->id); }
 
+// Esperar al hilo 0 o a uno mismo es ilegal: la PSP devuelve el error al instante (el juego lo hace).
+constexpr uint32_t SCE_KERNEL_ERROR_ILLEGAL_THID = 0x80020197;
+
 HLE(sceKernelWaitThreadEnd) {
+    if (A0 == 0 || (int)A0 == thread_current()->id) RET(SCE_KERNEL_ERROR_ILLEGAL_THID);
     Thread *t = thread_get((int)A0);
     if (!t) RET(SCE_KERNEL_ERROR_UNKNOWN_THID);
     if (t->state == ThreadState::Dormant || t->state == ThreadState::Dead) RET(t->exit_status);
@@ -42,6 +46,7 @@ HLE(sceKernelWaitThreadEnd) {
     RET(thread_wait(WaitType::ThreadEnd, t->id, tmo, A1, false));
 }
 HLE(sceKernelWaitThreadEndCB) {
+    if (A0 == 0 || (int)A0 == thread_current()->id) RET(SCE_KERNEL_ERROR_ILLEGAL_THID);
     Thread *t = thread_get((int)A0);
     if (!t) RET(SCE_KERNEL_ERROR_UNKNOWN_THID);
     if (t->state == ThreadState::Dormant || t->state == ThreadState::Dead) RET(t->exit_status);

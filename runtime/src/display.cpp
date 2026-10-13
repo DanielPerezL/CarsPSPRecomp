@@ -1,25 +1,38 @@
 #include "display.h"
 
 #include <cstdlib>
-#include <string>
 #include <vector>
 
+#include "gpu/renderer.h"
+#include "platform/window.h"
 #include "threads.h"
 
 static uint32_t g_fb_addr = 0, g_fb_stride = 512, g_fb_fmt = 3;
+static bool g_windowed = false;
 
-// Pulsaciones programadas para pruebas sin ventana: CARS_PRESS="2.5:start,4:cross" (segundos:botón)
+// Pulsaciones programadas para pruebas: CARS_PRESS="2.5:start,4:cross" (segundos:botón);
+// CARS_PRESS_LEN fija la duración de cada pulsación (por defecto 0,15 s)
 struct Press {
     double t;
     uint32_t mask;
 };
 static std::vector<Press> g_presses;
+struct Shot {
+    double t;
+    std::string path;
+    bool done = false;
+};
+static std::vector<Shot> g_shots;
+static double g_exit_after = 0;
+static double g_press_len = 0.15;
 
 void display_set_framebuf(uint32_t addr, uint32_t stride, uint32_t fmt) {
     if (addr != g_fb_addr) LOGT("display", "framebuffer %08x stride=%u fmt=%u", addr, stride, fmt);
-    g_fb_addr = addr;
-    g_fb_stride = stride;
-    g_fb_fmt = fmt;
+    if (addr) {  // addr = 0 desactiva la salida de vídeo: se mantiene el último
+        g_fb_addr = addr;
+        g_fb_stride = stride;
+        g_fb_fmt = fmt;
+    }
 }
 
 void display_get_framebuf(uint32_t *addr, uint32_t *stride, uint32_t *fmt) {
@@ -38,7 +51,9 @@ static uint32_t button_mask(const std::string &name) {
     return 0;
 }
 
-void display_init() {
+void display_init(bool windowed) {
+    g_windowed = windowed;
+    if (const char *l = getenv("CARS_PRESS_LEN")) g_press_len = atof(l);
     if (const char *p = getenv("CARS_PRESS")) {
         std::string s = p;
         size_t i = 0;
@@ -54,33 +69,41 @@ void display_init() {
     }
 }
 
+void display_add_screenshot(double t, const std::string &path) { g_shots.push_back({t, path}); }
+void display_set_exit_after(double t) { g_exit_after = t; }
+
 uint32_t display_buttons() {
     double now = time_us() / 1e6;
-    uint32_t mask = 0;
+    uint32_t mask = g_windowed ? window_pad().buttons : 0;
     for (auto &p : g_presses)
-        if (now >= p.t && now < p.t + 0.15) mask |= p.mask;
+        if (now >= p.t && now < p.t + g_press_len) mask |= p.mask;
     return mask;
 }
 
-void display_dump(const char *path) {
-    if (!g_fb_addr) return;
-    FILE *f = fopen(path, "wb");
-    if (!f) return;
-    fprintf(f, "P6\n480 272\n255\n");
-    for (int y = 0; y < 272; y++) {
-        for (int x = 0; x < 480; x++) {
-            uint8_t rgb[3];
-            if (g_fb_fmt == 3) {
-                uint32_t p = R32(g_fb_addr + (y * g_fb_stride + x) * 4);
-                rgb[0] = p & 0xFF; rgb[1] = p >> 8 & 0xFF; rgb[2] = p >> 16 & 0xFF;
-            } else {
-                uint16_t p = R16(g_fb_addr + (y * g_fb_stride + x) * 2);
-                if (g_fb_fmt == 0) { rgb[0] = (p & 0x1F) << 3; rgb[1] = (p >> 5 & 0x3F) << 2; rgb[2] = (p >> 11) << 3; }
-                else if (g_fb_fmt == 1) { rgb[0] = (p & 0x1F) << 3; rgb[1] = (p >> 5 & 0x1F) << 3; rgb[2] = (p >> 10 & 0x1F) << 3; }
-                else { rgb[0] = (p & 0xF) << 4; rgb[1] = (p >> 4 & 0xF) << 4; rgb[2] = (p >> 8 & 0xF) << 4; }
-            }
-            fwrite(rgb, 1, 3, f);
-        }
+void display_analog(uint8_t *lx, uint8_t *ly) {
+    *lx = *ly = 128;
+    if (g_windowed) {
+        PadState p = window_pad();
+        *lx = p.lx;
+        *ly = p.ly;
     }
-    fclose(f);
+}
+
+void display_vblank() {
+    if (!g_windowed) return;
+    if (!window_poll()) {
+        LOGI("display", "ventana cerrada");
+        exit(0);
+    }
+    renderer_present(g_fb_addr, g_fb_stride, g_fb_fmt);
+    double now = time_us() / 1e6;
+    for (auto &s : g_shots)
+        if (!s.done && now >= s.t) {
+            renderer_screenshot(s.path);
+            s.done = true;
+        }
+    if (g_exit_after > 0 && now >= g_exit_after) {
+        LOGI("display", "fin de la prueba (%.1f s)", g_exit_after);
+        exit(0);
+    }
 }

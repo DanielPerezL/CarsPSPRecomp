@@ -96,9 +96,9 @@ HLE(sceCtrlPeekBufferPositive) {
         uint32_t ts = (uint32_t)time_us();
         memcpy(e, &ts, 4);
         uint32_t buttons = display_buttons();
+        if (buttons) LOGT("ctrl", "botones %04x", buttons);
         memcpy(e + 4, &buttons, 4);
-        e[8] = 128;  // stick centrado
-        e[9] = 128;
+        display_analog(&e[8], &e[9]);
     }
     RET(A1);
 }

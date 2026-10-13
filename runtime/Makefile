@@ -9,24 +9,26 @@ CC      ?= gcc
 CXX     ?= g++
 # El código generado es enorme y plano: -O1 compila rápido y rinde bien.
 GENFLAGS := -O1 -fno-strict-aliasing -fwrapv -w -I include -I $(GEN)
-CFLAGS   := -O2 -g -Wall -Wextra -fno-strict-aliasing -I include -I src
+SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
+SDL_LIBS   := $(shell pkg-config --libs sdl2)
+CFLAGS   := -O2 -g -Wall -Wextra -fno-strict-aliasing -I include -I src $(SDL_CFLAGS)
 CXXFLAGS := -std=c++17 $(CFLAGS)
 
 GEN_SRC := $(wildcard $(GEN)/*.c)
-RT_SRC  := $(wildcard src/*.cpp)
+RT_SRC  := $(wildcard src/*.cpp src/gpu/*.cpp src/platform/*.cpp)
 GEN_OBJ := $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))
 RT_OBJ  := $(patsubst src/%.cpp,$(OBJ)/rt/%.o,$(RT_SRC))
 
 all: $(BIN)
 
 $(BIN): $(GEN_OBJ) $(RT_OBJ)
-	$(CXX) -o $@ $^ -lm
+	$(CXX) -o $@ $^ $(SDL_LIBS) -lm
 
 $(OBJ)/gen/%.o: $(GEN)/%.c include/recomp.h
 	@mkdir -p $(dir $@)
 	$(CC) $(GENFLAGS) -c $< -o $@
 
-$(OBJ)/rt/%.o: src/%.cpp $(wildcard src/*.h) include/recomp.h
+$(OBJ)/rt/%.o: src/%.cpp $(wildcard src/*.h src/gpu/*.h src/platform/*.h) include/recomp.h
 	@mkdir -p $(dir $@)
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 

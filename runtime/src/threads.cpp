@@ -5,7 +5,10 @@
 #include <algorithm>
 #include <map>
 
-static constexpr size_t HOST_STACK = 1 << 20;
+#include "display.h"
+
+// Pila del host por hilo: el driver de OpenGL se ejecuta dentro de los hilos (la GE dibuja al encolar).
+static constexpr size_t HOST_STACK = 4 << 20;
 static constexpr uint64_t VBLANK_US = 16683;  // 59.94 Hz
 
 static std::map<int, std::unique_ptr<Thread>> g_threads;
@@ -255,6 +258,7 @@ static void do_vblank() {
         if (h.enabled && h.handler) intr_call(h.handler, {(uint32_t)sub, h.arg});
     for (auto &[_, t] : g_threads)
         if (t->state == ThreadState::Waiting && t->wait == WaitType::Vblank) thread_wake(t.get(), 0);
+    display_vblank();
 }
 
 void sched_run() {
