@@ -10,11 +10,12 @@
 static uint32_t g_fb_addr = 0, g_fb_stride = 512, g_fb_fmt = 3;
 static bool g_windowed = false;
 
-// Pulsaciones programadas para pruebas: CARS_PRESS="2.5:start,4:cross" (segundos:botón);
-// CARS_PRESS_LEN fija la duración de cada pulsación (por defecto 0,15 s)
+// Pulsaciones programadas para pruebas: CARS_PRESS="2.5:start,4:cross,10:cross:20" (segundos:botón[:duración]);
+// CARS_PRESS_LEN fija la duración por defecto (0,15 s)
 struct Press {
     double t;
     uint32_t mask;
+    double len;
 };
 static std::vector<Press> g_presses;
 struct Shot {
@@ -61,9 +62,13 @@ void display_init(bool windowed) {
             size_t j = s.find(',', i);
             if (j == std::string::npos) j = s.size();
             std::string item = s.substr(i, j - i);
-            size_t colon = item.find(':');
-            if (colon != std::string::npos)
-                g_presses.push_back({atof(item.substr(0, colon).c_str()), button_mask(item.substr(colon + 1))});
+            size_t c1 = item.find(':');
+            if (c1 != std::string::npos) {
+                size_t c2 = item.find(':', c1 + 1);
+                std::string btn = item.substr(c1 + 1, c2 == std::string::npos ? std::string::npos : c2 - c1 - 1);
+                double len = c2 == std::string::npos ? g_press_len : atof(item.substr(c2 + 1).c_str());
+                g_presses.push_back({atof(item.substr(0, c1).c_str()), button_mask(btn), len});
+            }
             i = j + 1;
         }
     }
@@ -76,7 +81,7 @@ uint32_t display_buttons() {
     double now = time_us() / 1e6;
     uint32_t mask = g_windowed ? window_pad().buttons : 0;
     for (auto &p : g_presses)
-        if (now >= p.t && now < p.t + g_press_len) mask |= p.mask;
+        if (now >= p.t && now < p.t + p.len) mask |= p.mask;
     return mask;
 }
 
