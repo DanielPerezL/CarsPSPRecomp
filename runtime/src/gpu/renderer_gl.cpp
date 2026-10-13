@@ -202,6 +202,7 @@ struct Target {
     uint32_t addr = 0;
     int w = 480, h = 272;
     GLuint fbo = 0, color = 0, depth = 0;
+    bool cpu_written = false;  // la CPU/DMA lo ha sobrescrito desde el último dibujo de la GE (vídeos)
 };
 
 struct CachedTex {
@@ -415,6 +416,7 @@ void set_light_uniforms(const Snap &g) {
 void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const float *world, const float *view,
              const float *proj) {
     Target &t = target_for(g.fb_addr(), g.cmd[0x9D] & 0x7FF, g.arg(0xD5));
+    t.cpu_written = false;
     int S = g_cfg.scale;
     glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
     glViewport(0, 0, t.w * S, t.h * S);
@@ -553,7 +555,7 @@ void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     auto it = g_targets.find(fb_addr & 0x1FFFF0);
     GLuint src_fbo;
     int sw, sh;
-    if (it != g_targets.end()) {
+    if (it != g_targets.end() && !it->second.cpu_written) {
         // La GE ha dibujado ahí: se usa su FBO aunque no se redibuje cada vblank (cargas).
         g_presented = &it->second;
         src_fbo = it->second.fbo;
@@ -709,7 +711,20 @@ void renderer_draw(GpuPrim prim, const GpuVertex *v, int count, uint64_t match_k
     g_recording.cmds.push_back(std::move(d));
 }
 
-void renderer_invalidate(uint32_t, uint32_t) {}
+void renderer_invalidate(uint32_t addr, uint32_t size) {
+    // Escritura de CPU/DMA/transferencia en VRAM: los framebuffers afectados se muestran desde memoria.
+    if ((addr & 0x0F000000) != 0x04000000) return;
+    uint32_t lo = addr & 0x1FFFFF, hi = lo + size;
+    for (auto &[off, t] : g_targets) {
+        uint32_t t_end = off + 512 * t.h * 4;
+        if (lo < t_end && hi > off) t.cpu_written = true;
+    }
+}
+
+bool display_is_cpu(uint32_t fb_addr) {
+    auto it = g_targets.find(fb_addr & 0x1FFFF0);
+    return it == g_targets.end() || it->second.cpu_written;
+}
 
 void renderer_flip(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     if (!g_cfg.interpolate) return;
@@ -738,7 +753,13 @@ uint64_t renderer_next_present_in() {
 }
 
 bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
-    if (!g_cfg.interpolate || !g_have_last) {
+    if (!g_cfg.interpolate || !g_have_last || display_is_cpu(fb_addr)) {
+        if (g_cfg.interpolate) {  // sin interpolación posible (vídeo): se limita a la frecuencia de presentación
+            uint64_t now = time_us();
+            if (now < g_last_present + g_present_interval) return false;
+            g_last_present = now;
+            count_stats(false);
+        }
         blit_to_window(fb_addr, stride, fmt);
         return true;
     }

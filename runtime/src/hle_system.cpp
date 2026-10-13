@@ -3,6 +3,7 @@
 #include <map>
 
 #include "display.h"
+#include "gpu/renderer.h"
 #include "threads.h"
 
 int next_uid();
@@ -57,6 +58,7 @@ HLE(sceKernelLibcGettimeofday) {
 HLE(sceKernelSetGPO) { RET(0); }
 HLE(sceDmacMemcpy) {
     memmove(MEMP(A0), MEMP(A1), A2);
+    renderer_invalidate(A0, A2);  // p. ej. fotogramas de vídeo copiados a un framebuffer
     RET(0);
 }
 

@@ -17,7 +17,7 @@ CFLAGS   := -O2 -g -Wall -Wextra -fno-strict-aliasing -I include -I src $(SDL_CF
 CXXFLAGS := -std=c++17 $(CFLAGS)
 
 GEN_SRC := $(wildcard $(GEN)/*.c)
-RT_SRC  := $(wildcard src/*.cpp src/gpu/*.cpp src/platform/*.cpp src/audio/*.cpp)
+RT_SRC  := $(wildcard src/*.cpp src/gpu/*.cpp src/platform/*.cpp src/audio/*.cpp src/media/*.cpp)
 GEN_OBJ := $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))
 RT_OBJ  := $(patsubst src/%.cpp,$(OBJ)/rt/%.o,$(RT_SRC))
 

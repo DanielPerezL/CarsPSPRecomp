@@ -6,6 +6,7 @@
 #include <map>
 
 #include "display.h"
+#include "gpu/renderer.h"
 
 // Pila del host por hilo: el driver de OpenGL se ejecuta dentro de los hilos (la GE dibuja al encolar).
 static constexpr size_t HOST_STACK = 4 << 20;
@@ -269,6 +270,9 @@ void sched_run() {
             g_next_vblank += VBLANK_US;
         }
         for (auto fn : g_hooks) fn(now);
+        // Presentación de fotogramas interpolados cuando toca, aunque haya hilos activos
+        // (p. ej. el lector de vídeo hace esperas muy cortas y el planificador casi nunca está ocioso).
+        if (renderer_next_present_in() == 0) display_idle();
         uint64_t next_event = g_next_vblank;
         for (auto &[_, t] : g_threads) {
             if (t->state != ThreadState::Waiting || !t->wake_at) continue;
