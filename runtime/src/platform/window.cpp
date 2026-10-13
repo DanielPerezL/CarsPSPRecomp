@@ -1,5 +1,6 @@
 #include "window.h"
 
+#define SDL_MAIN_HANDLED  // main() es nuestro, no el de SDL (importa en Windows)
 #include <SDL2/SDL.h>
 
 #include <cmath>
@@ -32,6 +33,7 @@ enum : uint32_t {
 };
 
 bool window_init(const WindowConfig &cfg) {
+    SDL_SetMainReady();
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
         LOGE("window", "SDL_Init: %s", SDL_GetError());
         return false;

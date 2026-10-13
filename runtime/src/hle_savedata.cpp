@@ -2,16 +2,15 @@
 // Las partidas se guardan sin cifrar en <saves>/PSP/SAVEDATA/<juego><partida>/, con la misma
 // estructura que en el Memory Stick: el fichero de datos, PARAM.BIN (parámetros SFO) e ICON0.PNG.
 // Estructuras y códigos según PPSSPP (Core/Dialog/SavedataParam.*).
-#include <dirent.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 #include <vector>
 
 #include "threads.h"
+
+namespace fs = std::filesystem;
 
 namespace {
 
@@ -31,8 +30,8 @@ std::string save_dir(const std::string &game, const std::string &save) {
 }
 
 void mkdirs(const std::string &path) {
-    for (size_t i = 1; i <= path.size(); i++)
-        if (i == path.size() || path[i] == '/') mkdir(path.substr(0, i).c_str(), 0755);
+    std::error_code ec;
+    fs::create_directories(path, ec);
 }
 
 bool read_file(const std::string &path, std::vector<uint8_t> &out) {
@@ -56,16 +55,11 @@ void write_file(const std::string &path, const uint8_t *data, size_t n) {
 
 uint64_t dir_size(const std::string &dir, bool *exists) {
     uint64_t total = 0;
-    *exists = false;
-    if (DIR *d = opendir(dir.c_str())) {
-        *exists = true;
-        while (dirent *e = readdir(d)) {
-            struct stat st;
-            if (e->d_name[0] != '.' && stat((dir + "/" + e->d_name).c_str(), &st) == 0)
-                total += (st.st_size + CLUSTER - 1) / CLUSTER * CLUSTER;
-        }
-        closedir(d);
-    }
+    std::error_code ec;
+    *exists = fs::is_directory(dir, ec);
+    if (*exists)
+        for (const auto &e : fs::directory_iterator(dir, ec))
+            if (e.is_regular_file(ec)) total += (e.file_size(ec) + CLUSTER - 1) / CLUSTER * CLUSTER;
     return total;
 }
 
@@ -173,11 +167,9 @@ HLE(sceUtilitySavedataInitStart) {
         bool exists;
         dir_size(dir, &exists);
         if (!exists) result = ERR_DELETE_NO_DATA;
-        else if (DIR *d = opendir(dir.c_str())) {
-            while (dirent *e = readdir(d))
-                if (e->d_name[0] != '.') remove((dir + "/" + e->d_name).c_str());
-            closedir(d);
-            rmdir(dir.c_str());
+        else {
+            std::error_code ec;
+            fs::remove_all(dir, ec);
         }
         break;
     }

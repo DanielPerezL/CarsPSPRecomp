@@ -1,9 +1,9 @@
 #include "iso.h"
 
-#include <strings.h>
-
 #include <cstdio>
 #include <cstring>
+
+#include "platform/os.h"
 
 static FILE *g_iso = nullptr;
 static IsoEntry g_root;
@@ -13,7 +13,7 @@ bool iso_loaded() { return g_iso != nullptr; }
 
 size_t iso_read(uint32_t lbn, uint64_t offset, void *dst, size_t len) {
     if (!g_iso) return 0;
-    fseeko(g_iso, (off_t)lbn * SECTOR + (off_t)offset, SEEK_SET);
+    os_fseek(g_iso, (int64_t)lbn * SECTOR + (int64_t)offset, SEEK_SET);
     return fread(dst, 1, len, g_iso);
 }
 
@@ -79,7 +79,7 @@ bool iso_lookup(const std::string &path_in, IsoEntry *out) {
         if (!cur.dir) return false;
         bool found = false;
         for (const IsoEntry &e : iso_list(cur)) {
-            if (strcasecmp(e.name.c_str(), comp.c_str()) == 0) {
+            if (os_stricmp(e.name.c_str(), comp.c_str()) == 0) {
                 cur = e;
                 found = true;
                 break;

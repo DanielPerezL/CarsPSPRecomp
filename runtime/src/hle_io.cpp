@@ -1,13 +1,13 @@
 // IoFileMgrForUser y sceUmdUser: el UMD se lee de la ISO (iso.cpp); ms0: es la carpeta de partidas.
-#include <dirent.h>
-#include <sys/stat.h>
-
 #include <algorithm>
-#include <cerrno>
+#include <filesystem>
 #include <map>
 
 #include "iso.h"
+#include "platform/os.h"
 #include "threads.h"
+
+namespace fs = std::filesystem;
 
 std::string g_disc_root = "extracted";
 std::string g_save_root = "saves";
@@ -16,18 +16,10 @@ static std::string g_cwd = "disc0:/PSP_GAME/USRDIR";
 // Resuelve un componente sin distinguir mayúsculas (el UMD es ISO9660 en mayúsculas).
 static std::string find_ci(const std::string &dir, const std::string &name) {
     std::string direct = dir + "/" + name;
-    struct stat st;
-    if (stat(direct.c_str(), &st) == 0) return direct;
-    if (DIR *d = opendir(dir.c_str())) {
-        while (dirent *e = readdir(d)) {
-            if (strcasecmp(e->d_name, name.c_str()) == 0) {
-                std::string r = dir + "/" + e->d_name;
-                closedir(d);
-                return r;
-            }
-        }
-        closedir(d);
-    }
+    std::error_code ec;
+    if (fs::exists(direct, ec)) return direct;
+    for (const auto &e : fs::directory_iterator(dir, ec))
+        if (os_stricmp(e.path().filename().string().c_str(), name.c_str()) == 0) return e.path().string();
     return direct;
 }
 
@@ -70,9 +62,10 @@ struct OpenFile {
 static std::map<int, OpenFile> g_files;
 static int g_next_fd = 3;
 
+// Crea los directorios padre de una ruta.
 static void mkdirs(const std::string &path) {
-    for (size_t i = 1; i < path.size(); i++)
-        if (path[i] == '/') mkdir(path.substr(0, i).c_str(), 0755);
+    std::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);
 }
 
 static int io_open(const char *psp, uint32_t flags) {
@@ -170,8 +163,7 @@ HLE(sceIoLseek) {
         f->pos = (uint64_t)(base + off < 0 ? 0 : base + off);
         pos = (int64_t)f->pos;
     } else {
-        fseeko(f->f, off, T0 == 0 ? SEEK_SET : T0 == 1 ? SEEK_CUR : SEEK_END);
-        pos = ftello(f->f);
+        pos = os_fseek(f->f, off, T0 == 0 ? SEEK_SET : T0 == 1 ? SEEK_CUR : SEEK_END);
     }
     c->r[2] = (uint32_t)pos;
     c->r[3] = (uint32_t)(pos >> 32);
@@ -208,15 +200,17 @@ HLE(sceIoGetstat) {
         fill_stat(MEMP(A1), e.dir, e.size);
         RET(0);
     }
-    struct stat st;
-    if (stat(host_path(mem_str(A0)).c_str(), &st) != 0) RET(SCE_ERROR_FILE_NOT_FOUND);
-    fill_stat(MEMP(A1), S_ISDIR(st.st_mode), st.st_size);
+    std::error_code ec;
+    fs::path hp = host_path(mem_str(A0));
+    if (!fs::exists(hp, ec)) RET(SCE_ERROR_FILE_NOT_FOUND);
+    bool dir = fs::is_directory(hp, ec);
+    fill_stat(MEMP(A1), dir, dir ? 0 : (int64_t)fs::file_size(hp, ec));
     RET(0);
 }
 
 HLE(sceIoMkdir) {
-    std::string hp = host_path(mem_str(A0));
-    mkdirs(hp + "/");
+    std::error_code ec;
+    fs::create_directories(host_path(mem_str(A0)), ec);
     RET(0);
 }
 HLE(sceIoRename) {
@@ -238,15 +232,15 @@ HLE(sceIoDopen) {
         if (!iso_lookup(rest, &e) || !e.dir) RET(SCE_ERROR_FILE_NOT_FOUND);
         for (const IsoEntry &x : iso_list(e)) od.entries.push_back({x.name, {x.dir, x.size}});
     } else {
-        std::string hp = host_path(mem_str(A0));
-        DIR *d = opendir(hp.c_str());
-        if (!d) RET(SCE_ERROR_FILE_NOT_FOUND);
-        while (dirent *e = readdir(d)) {
-            struct stat st;
-            stat((hp + "/" + e->d_name).c_str(), &st);
-            od.entries.push_back({e->d_name, {S_ISDIR(st.st_mode), st.st_size}});
+        std::error_code ec;
+        fs::path hp = host_path(mem_str(A0));
+        if (!fs::is_directory(hp, ec)) RET(SCE_ERROR_FILE_NOT_FOUND);
+        od.entries.push_back({".", {true, 0}});
+        od.entries.push_back({"..", {true, 0}});
+        for (const auto &e : fs::directory_iterator(hp, ec)) {
+            bool dir = e.is_directory(ec);
+            od.entries.push_back({e.path().filename().string(), {dir, dir ? 0 : (int64_t)e.file_size(ec)}});
         }
-        closedir(d);
     }
     int fd = g_next_fd++;
     g_dirs[fd] = std::move(od);

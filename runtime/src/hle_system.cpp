@@ -4,6 +4,7 @@
 
 #include "display.h"
 #include "gpu/renderer.h"
+#include "platform/os.h"
 #include "threads.h"
 
 int next_uid();
@@ -48,10 +49,9 @@ HLE(sceKernelLibcTime) {
 }
 HLE(sceKernelLibcGettimeofday) {
     if (A0) {
-        timespec ts;
-        clock_gettime(CLOCK_REALTIME, &ts);
-        W32(A0, (uint32_t)ts.tv_sec);
-        W32(A0 + 4, (uint32_t)(ts.tv_nsec / 1000));
+        uint64_t us = os_unix_time_us();
+        W32(A0, (uint32_t)(us / 1000000));
+        W32(A0 + 4, (uint32_t)(us % 1000000));
     }
     RET(0);
 }
@@ -107,10 +107,8 @@ HLE(sceCtrlPeekBufferPositive) {
 
 // ---------------------------------------------------------------- Reloj
 static uint64_t rtc_tick() {
-    timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
     // ticks (µs) desde 0001-01-01; el epoch Unix es 62135596800 s después
-    return (uint64_t)(ts.tv_sec + 62135596800ULL) * 1000000ULL + ts.tv_nsec / 1000;
+    return os_unix_time_us() + 62135596800ULL * 1000000ULL;
 }
 HLE(sceRtcGetCurrentTick) {
     uint64_t t = rtc_tick();
@@ -121,7 +119,7 @@ HLE(sceRtcGetCurrentTick) {
 HLE(sceRtcGetCurrentClockLocalTime) {
     time_t now = time(nullptr);
     tm lt;
-    localtime_r(&now, &lt);
+    os_localtime(now, &lt);
     uint16_t v[6] = {(uint16_t)(lt.tm_year + 1900), (uint16_t)(lt.tm_mon + 1), (uint16_t)lt.tm_mday,
                      (uint16_t)lt.tm_hour, (uint16_t)lt.tm_min, (uint16_t)lt.tm_sec};
     memcpy(MEMP(A0), v, 12);

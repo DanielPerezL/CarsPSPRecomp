@@ -1,14 +1,13 @@
 // Hilos de la PSP sobre fibers del host y planificador por prioridad (cooperativo como el kernel real:
 // sin reparto de tiempo; solo se cambia de hilo al bloquear o al despertar uno más prioritario).
 #pragma once
-#include <ucontext.h>
-
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "core.h"
+#include "platform/os.h"
 
 enum class WaitType { None, Delay, Sleep, Sema, EventFlag, ThreadEnd, Vblank, Callback, Generic };
 enum class ThreadState { Dormant, Ready, Running, Waiting, Dead };
@@ -35,10 +34,9 @@ struct Thread {
     int wakeup_count = 0;
     uint32_t exit_status = 0;
 
-    // fiber
-    ucontext_t uc{};
-    std::unique_ptr<uint8_t[]> host_stack;
-    bool started_fiber = false;
+    // fiber del host en la que corre (se destruye siempre desde fuera de ella)
+    OsFiber *fiber = nullptr;
+    ~Thread() { os_fiber_destroy(fiber); }
 };
 
 void sched_init();

@@ -1,8 +1,6 @@
 // Memoria, tabla de funciones, log y puntos de fallo del código recompilado.
 #include "core.h"
 
-#include <sys/mman.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cstdarg>
@@ -11,6 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "platform/os.h"
 #include "threads.h"
 
 uint8_t *g_mem = nullptr;
@@ -58,8 +57,8 @@ static std::map<uint32_t, std::pair<uint32_t, std::string>> g_blocks;  // direcc
 static uint32_t g_heap_lo;
 
 void mem_init() {
-    void *p = mmap(nullptr, 0x20000000, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    if (p == MAP_FAILED) fatal("no se pudieron reservar 512 MB de espacio de direcciones");
+    void *p = os_reserve_memory(0x20000000);
+    if (!p) fatal("no se pudieron reservar 512 MB de espacio de direcciones");
     g_mem = static_cast<uint8_t *>(p);
     g_heap_lo = (g_recomp_bss_end + 0xFF) & ~0xFFu;
     // La imagen del juego ocupa desde el inicio de la partición hasta el final de .bss.

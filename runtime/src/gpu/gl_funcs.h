@@ -1,6 +1,6 @@
 // Funciones de OpenGL 3.3 core cargadas en tiempo de ejecución (SDL_GL_GetProcAddress), igual en Linux y Windows.
 #pragma once
-#include <GL/glcorearb.h>
+#include <GL/glcorearb.h>  // runtime/third_party (Khronos)
 
 #define CARS_GL_FUNCS(X)                                                                   \
     X(PFNGLGETERRORPROC, glGetError)                                                       \

@@ -1,7 +1,5 @@
 #include "threads.h"
 
-#include <time.h>
-
 #include <algorithm>
 #include <map>
 
@@ -14,7 +12,7 @@ static constexpr uint64_t VBLANK_US = 16683;  // 59.94 Hz
 
 static std::map<int, std::unique_ptr<Thread>> g_threads;
 static Thread *g_current = nullptr;
-static ucontext_t g_sched_uc;
+static OsFiber *g_sched_fiber = nullptr;
 static int g_next_uid = 0x100;
 static uint64_t g_seq = 0;
 static uint64_t g_next_vblank = VBLANK_US;
@@ -36,15 +34,11 @@ static void make_ready(Thread *t) {
 }
 
 // ---------------------------------------------------------------- fibers
-static void fiber_entry() {
+static void fiber_entry(void *) {
     Thread *t = g_current;
     recomp_call(&t->ctx, t->entry);
-    // retorno de la función de entrada = sceKernelExitThread(v0)
-    t->exit_status = t->ctx.r[2];
-    t->state = ThreadState::Dormant;
-    for (Thread *w : threads_waiting_on(WaitType::ThreadEnd, t->id)) thread_wake(w, t->exit_status);
-    LOGD("thread", "hilo %d '%s' terminó (%08x)", t->id, t->name.c_str(), t->exit_status);
-    // uc_link vuelve al planificador
+    // retorno de la función de entrada = sceKernelExitThread(v0); la fiber nunca retorna
+    thread_exit_current(t->ctx.r[2], false);
 }
 
 int thread_create(const char *name, uint32_t entry, int prio, uint32_t stack_size, uint32_t attr) {
@@ -79,12 +73,8 @@ void thread_start(Thread *t, uint32_t argsize, uint32_t argp) {
     t->ctx.r[29] = sp - 64;
     t->ctx.fcr31 = 0x00000E00;
     t->ctx.vfpu_ctrl[0] = t->ctx.vfpu_ctrl[1] = 0xE4;  // prefijos S/T neutros
-    t->host_stack.reset(new uint8_t[HOST_STACK]);
-    getcontext(&t->uc);
-    t->uc.uc_stack.ss_sp = t->host_stack.get();
-    t->uc.uc_stack.ss_size = HOST_STACK;
-    t->uc.uc_link = &g_sched_uc;
-    makecontext(&t->uc, fiber_entry, 0);
+    os_fiber_destroy(t->fiber);  // un hilo reiniciado empieza en una fiber nueva
+    t->fiber = os_fiber_create(HOST_STACK, fiber_entry, nullptr);
     t->wait = WaitType::None;
     t->wakeup_count = 0;
     make_ready(t);
@@ -92,10 +82,7 @@ void thread_start(Thread *t, uint32_t argsize, uint32_t argp) {
 }
 
 // Vuelve al planificador desde el hilo actual.
-static void yield_to_scheduler() {
-    Thread *t = g_current;
-    swapcontext(&t->uc, &g_sched_uc);
-}
+static void yield_to_scheduler() { os_fiber_switch(g_sched_fiber); }
 
 void thread_exit_current(uint32_t status, bool del) {
     Thread *t = g_current;
@@ -251,7 +238,7 @@ void threads_dump() {
 }
 
 // ---------------------------------------------------------------- planificador
-void sched_init() {}
+void sched_init() { g_sched_fiber = os_fiber_main(); }
 
 static void do_vblank() {
     g_vblanks++;
@@ -292,15 +279,12 @@ void sched_run() {
             uint64_t wait = next_event > now ? next_event - now : 0;
             // Mientras el juego espera se presentan fotogramas interpolados.
             if (wait > 500) wait = std::min(wait, display_idle());
-            if (wait) {
-                timespec ts{(time_t)(wait / 1000000), (long)(wait % 1000000) * 1000};
-                nanosleep(&ts, nullptr);
-            }
+            if (wait) os_sleep_us(wait);
             continue;
         }
         g_current = t;
         t->state = ThreadState::Running;
-        swapcontext(&g_sched_uc, &t->uc);
+        os_fiber_switch(t->fiber);
         g_current = nullptr;
         if (t->state == ThreadState::Dead) g_threads.erase(t->id);
     }

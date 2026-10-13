@@ -1,9 +1,7 @@
 #include "texture_replace.h"
 
-#include <dirent.h>
-#include <sys/stat.h>
-
 #include <cstdio>
+#include <filesystem>
 #include <unordered_set>
 
 #include "../core.h"
@@ -19,6 +17,8 @@
 #include "../../third_party/stb/stb_image_write.h"
 #pragma GCC diagnostic pop
 
+namespace fs = std::filesystem;
+
 static std::string g_replace_dir, g_dump_dir;
 static std::unordered_set<uint64_t> g_available, g_dumped;
 
@@ -31,14 +31,14 @@ std::string texrep_name(uint64_t hash) {
 void texrep_init(const std::string &replace_dir, const std::string &dump_dir) {
     g_replace_dir = replace_dir;
     g_dump_dir = dump_dir;
-    if (!dump_dir.empty()) mkdir(dump_dir.c_str(), 0755);
-    if (DIR *d = opendir(replace_dir.c_str())) {
-        while (dirent *e = readdir(d)) {
+    std::error_code ec;
+    if (!dump_dir.empty()) fs::create_directories(dump_dir, ec);
+    if (fs::is_directory(replace_dir, ec)) {
+        for (const auto &e : fs::directory_iterator(replace_dir, ec)) {
             unsigned long long h;
             char ext[8];
-            if (sscanf(e->d_name, "%16llx.%4s", &h, ext) == 2) g_available.insert(h);
+            if (sscanf(e.path().filename().string().c_str(), "%16llx.%4s", &h, ext) == 2) g_available.insert(h);
         }
-        closedir(d);
         LOGI("tex", "%zu texturas de sustitución en %s", g_available.size(), replace_dir.c_str());
     }
 }
@@ -61,7 +61,7 @@ bool texrep_load(uint64_t hash, std::vector<uint8_t> &rgba, int &w, int &h) {
 void texrep_dump(uint64_t hash, const uint8_t *rgba, int w, int h) {
     if (g_dump_dir.empty() || !g_dumped.insert(hash).second) return;
     std::string path = g_dump_dir + "/" + texrep_name(hash);
-    struct stat st;
-    if (stat(path.c_str(), &st) == 0) return;
+    std::error_code ec;
+    if (fs::exists(path, ec)) return;
     stbi_write_png(path.c_str(), w, h, 4, rgba, w * 4);
 }
