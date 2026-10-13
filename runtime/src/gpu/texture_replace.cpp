@@ -65,3 +65,7 @@ void texrep_dump(uint64_t hash, const uint8_t *rgba, int w, int h) {
     if (fs::exists(path, ec)) return;
     stbi_write_png(path.c_str(), w, h, 4, rgba, w * 4);
 }
+
+void texrep_write_png(const std::string &path, const uint8_t *rgba, int w, int h) {
+    stbi_write_png(path.c_str(), w, h, 4, rgba, w * 4);
+}

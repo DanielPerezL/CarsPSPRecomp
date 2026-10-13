@@ -220,6 +220,7 @@ std::unordered_map<std::string, GLint> g_loc;
 std::unordered_map<uint32_t, Target> g_targets;
 std::unordered_map<uint64_t, CachedTex> g_textures;
 Target *g_presented = nullptr;
+float g_max_aniso = 0;
 std::string g_pending_shot;
 GLuint g_cpu_tex = 0, g_cpu_fbo = 0;
 std::vector<uint8_t> g_rgba;
@@ -296,7 +297,9 @@ Target &target_for(uint32_t addr, uint32_t stride, uint32_t scissor_br) {
     if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) fatal("FBO incompleto");
     glClearColor(0, 0, 0, 0);
     glClearDepth(0);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    glClearStencil(0);
+    glStencilMask(0xFF);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
     LOGI("gpu", "framebuffer %06x: %dx%d (interno %dx%d)", addr, t.w, t.h, t.w * S, t.h * S);
     return t;
 }
@@ -356,7 +359,19 @@ void resolve_texture(Snap &s) {
         glBindTexture(GL_TEXTURE_2D, ct.tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, hh, 0, GL_RGBA, GL_UNSIGNED_BYTE, g_rgba.data());
-        if (replaced) glGenerateMipmap(GL_TEXTURE_2D);
+        if (replaced) {
+            // Mipmaps solo hasta la resolución original: la PSP no los tenía, y reducir más mezcla el alfa
+            // de zonas transparentes (p. ej. la barra de nitro, un quad muy estrecho, se veía como una
+            // franja semitransparente; la vegetación con test de alfa se desvanecería a lo lejos).
+            int levels = 0;
+            while ((p.w << (levels + 1)) <= w && (p.h << (levels + 1)) <= hh) levels++;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_BASE_LEVEL, 0);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels);
+            if (g_max_aniso > 1) glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY, g_max_aniso);
+            glGenerateMipmap(GL_TEXTURE_2D);
+        } else {
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+        }
         ct.hash = h;
         ct.w = w;
         ct.h = hh;
@@ -446,6 +461,16 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
         glDepthMask(m >> 10 & 1);
         bool col = m >> 8 & 1, alpha = m >> 9 & 1;
         glColorMask(col, col, col, alpha);
+        // En la PSP el stencil es el canal alfa del framebuffer: borrar el alfa borra también el stencil,
+        // con el alfa del color de borrado.
+        if (alpha && count > 0) {
+            glEnable(GL_STENCIL_TEST);
+            glStencilFunc(GL_ALWAYS, v[count - 1].col[3], 0xFF);
+            glStencilOp(GL_REPLACE, GL_REPLACE, GL_REPLACE);
+            glStencilMask(0xFF);
+        } else {
+            glDisable(GL_STENCIL_TEST);
+        }
         glUniform1i(U("u_texOn"), 0);
         glUniform1i(U("u_lighting"), 0);
         glUniform1i(U("u_fog"), 0);
@@ -460,6 +485,19 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
         glDepthMask(!(g.arg(0xE7) & 1) && (g.arg(0x23) & 1));
         uint32_t cm = g.arg(0xE8);
         glColorMask(!(cm & 0xFF), !(cm >> 8 & 0xFF), !(cm >> 16 & 0xFF), !(g.arg(0xE9) & 0xFF));
+
+        // Stencil (p. ej. el minimapa circular: se marca el círculo y el mapa solo se pinta dentro).
+        if (g.arg(0x24) & 1) {
+            static const GLenum F[8] = {GL_NEVER, GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, GL_LESS, GL_LEQUAL, GL_GREATER, GL_GEQUAL};
+            static const GLenum OP[8] = {GL_KEEP, GL_ZERO, GL_REPLACE, GL_INVERT, GL_INCR, GL_DECR, GL_KEEP, GL_KEEP};
+            uint32_t sf = g.arg(0xDC), so = g.arg(0xDD);
+            glEnable(GL_STENCIL_TEST);
+            glStencilFunc(F[sf & 7], sf >> 8 & 0xFF, sf >> 16 & 0xFF);
+            glStencilOp(OP[so & 7], OP[so >> 8 & 7], OP[so >> 16 & 7]);
+            glStencilMask(~g.arg(0xE9) & 0xFF);  // la máscara de escritura del alfa es la del stencil
+        } else {
+            glDisable(GL_STENCIL_TEST);
+        }
 
         if (g.arg(0x21) & 1) {
             uint32_t b = g.arg(0xDF);
@@ -572,6 +610,7 @@ void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     window_drawable_size(&ww, &wh);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_STENCIL_TEST);
     glColorMask(1, 1, 1, 1);
     glViewport(0, 0, ww, wh);
     glClearColor(0, 0, 0, 1);
@@ -677,6 +716,12 @@ void render_interpolated(float t) {
 
 bool renderer_init(const RendererConfig &cfg) {
     g_cfg = cfg;
+    // Filtrado anisotrópico para las texturas reescaladas (núcleo en GL 4.6; extensión casi universal antes).
+    if (SDL_GL_ExtensionSupported("GL_ARB_texture_filter_anisotropic") ||
+        SDL_GL_ExtensionSupported("GL_EXT_texture_filter_anisotropic")) {
+        glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &g_max_aniso);
+        g_max_aniso = std::min(g_max_aniso, 16.f);
+    }
     g_prog = glCreateProgram();
     glAttachShader(g_prog, compile(GL_VERTEX_SHADER, VS));
     glAttachShader(g_prog, compile(GL_FRAGMENT_SHADER, FS));
@@ -719,7 +764,63 @@ bool renderer_init(const RendererConfig &cfg) {
 
 bool renderer_interpolating() { return g_cfg.interpolate; }
 
+// Depuración: CARS_GE_DUMP=T registra el estado de cada dibujo del primer fotograma tras el segundo T.
+static const double g_dump_at = getenv("CARS_GE_DUMP") ? atof(getenv("CARS_GE_DUMP")) : 1e30;
+static int g_dump_state = 0, g_dump_index = 0;  // 0 = esperando, 1 = volcando, 2 = hecho
+
+static void dump_draw(GpuPrim prim, const GpuVertex *v, int count) {
+    const uint32_t *c = g_ge.cmd;
+    auto A = [&](int i) { return c[i] & 0xFFFFFF; };
+    float x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (int i = 0; i < count; i++) {
+        x0 = std::min(x0, v[i].pos[0]); x1 = std::max(x1, v[i].pos[0]);
+        y0 = std::min(y0, v[i].pos[1]); y1 = std::max(y1, v[i].pos[1]);
+    }
+    LOGI("gedump", "#%d fb=%06x fmt=%u prim=%d n=%d thr=%d bbox=(%.0f,%.0f)-(%.0f,%.0f) clear=%d:%03x "
+         "tex=%d:%06x fmt%u blend=%d:%03x %06x/%06x atest=%d:%06x stencil=%d func=%06x op=%06x "
+         "depth=%d:%u zmask=%u cmask=%06x amask=%02x logic=%d",
+         g_dump_index++, A(0x9C) & 0x1FFFF0, A(0xD2), (int)prim, count, (c[0x12] >> 23) & 1, x0, y0, x1, y1,
+         A(0xD3) & 1, A(0xD3) >> 8 & 0x7, A(0x1E) & 1, A(0xA0) | (A(0xA8) & 0xFF0000) << 8, A(0xC3),
+         A(0x21) & 1, A(0xDF), A(0xE0), A(0xE1), A(0x22) & 1, A(0xDB), A(0x24) & 1, A(0xDC), A(0xDD),
+         A(0x23) & 1, A(0xDE) & 7, A(0xE7) & 1, A(0xE8), A(0xE9) & 0xFF, A(0x25) & 1);
+    if (count > 12) return;
+    if (const char *dir = getenv("CARS_GE_DUMP_DIR"); dir && (A(0x1E) & 1)) {  // textura tal y como se usa
+        TexParams p{g_ge.tex_addr(0), g_ge.tex_bufw(0), g_ge.tex_w(0), g_ge.tex_h(0), (int)(A(0xC3) & 0xF),
+                    (A(0xC2) & 1) != 0, A(0xC5)};
+        std::vector<uint8_t> rgba;
+        texture_decode(p, g_ge.clut, rgba);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%03d_%08x.png", dir, g_dump_index - 1, p.addr);
+        texrep_write_png(path, rgba.data(), p.w, p.h);
+        LOGI("gedump", "    clutfmt=%06x clutaddr=%08x -> %s", p.clutfmt,
+             (A(0xB0) & 0xFFFFF0) | ((c[0xB1] & 0x0F0000) << 8), path);
+    }
+    auto F = [&](int i) { uint32_t u = c[i] << 8; float f; memcpy(&f, &u, 4); return f; };
+    LOGI("gedump", "    tex %dx%d wrap=%04x filt=%04x uvscale=(%.3f,%.3f) off=(%.3f,%.3f) texfunc=%06x vtype=%06x",
+         1 << (A(0xB8) & 0xF), 1 << (A(0xB8) >> 8 & 0xF), A(0xC7), A(0xC6), F(0x48), F(0x49), F(0x4A), F(0x4B),
+         A(0xC9), A(0x12));
+    // Vértices en coordenadas de pantalla de la PSP (proyección * vista * mundo), UV y color
+    float w44[16], v44[16];
+    mat43_to_44(g_ge.world, w44);
+    mat43_to_44(g_ge.view, v44);
+    for (int i = 0; i < count; i++) {
+        float p[4] = {v[i].pos[0], v[i].pos[1], v[i].pos[2], 1}, q[4], r[4];
+        float sx = p[0], sy = p[1];
+        if (!((c[0x12] >> 23) & 1)) {
+            for (int k = 0; k < 4; k++) q[k] = w44[k] * p[0] + w44[4 + k] * p[1] + w44[8 + k] * p[2] + w44[12 + k];
+            for (int k = 0; k < 4; k++) r[k] = v44[k] * q[0] + v44[4 + k] * q[1] + v44[8 + k] * q[2] + v44[12 + k] * q[3];
+            for (int k = 0; k < 4; k++)
+                q[k] = g_ge.proj[k] * r[0] + g_ge.proj[4 + k] * r[1] + g_ge.proj[8 + k] * r[2] + g_ge.proj[12 + k] * r[3];
+            sx = 240 + 240 * q[0] / q[3];
+            sy = 136 - 136 * q[1] / q[3];
+        }
+        LOGI("gedump", "    v%d pant=(%.1f,%.1f) uv=(%.3f,%.3f) col=%02x%02x%02x%02x", i, sx, sy, v[i].uv[0], v[i].uv[1],
+             v[i].col[0], v[i].col[1], v[i].col[2], v[i].col[3]);
+    }
+}
+
 void renderer_draw(GpuPrim prim, const GpuVertex *v, int count, uint64_t match_key) {
+    if (g_dump_state == 1) dump_draw(prim, v, count);
     DrawCmd d;
     memcpy(d.snap.cmd, g_ge.cmd, sizeof(d.snap.cmd));
     memcpy(d.snap.world, g_ge.world, sizeof(d.snap.world));
@@ -756,6 +857,8 @@ bool display_is_cpu(uint32_t fb_addr) {
 }
 
 void renderer_flip(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
+    if (g_dump_state == 1) g_dump_state = 2;
+    if (g_dump_state == 0 && time_us() / 1e6 >= g_dump_at) g_dump_state = 1;
     if (!g_cfg.interpolate) return;
     if (g_recording.cmds.empty() && g_have_last) {  // flip sin dibujos nuevos: se mantiene el fotograma
         g_last.display = fb_addr;

@@ -12,3 +12,5 @@ bool texrep_load(uint64_t hash, std::vector<uint8_t> &rgba, int &w, int &h);
 // Guarda la textura original (una vez por hash) si el volcado está activo.
 void texrep_dump(uint64_t hash, const uint8_t *rgba, int w, int h);
 std::string texrep_name(uint64_t hash);
+// Escribe un PNG (depuración).
+void texrep_write_png(const std::string &path, const uint8_t *rgba, int w, int h);

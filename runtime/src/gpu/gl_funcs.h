@@ -15,6 +15,10 @@
     X(PFNGLCOLORMASKPROC, glColorMask)                                                     \
     X(PFNGLDEPTHMASKPROC, glDepthMask)                                                     \
     X(PFNGLDEPTHFUNCPROC, glDepthFunc)                                                     \
+    X(PFNGLSTENCILFUNCPROC, glStencilFunc)                                                 \
+    X(PFNGLSTENCILOPPROC, glStencilOp)                                                     \
+    X(PFNGLSTENCILMASKPROC, glStencilMask)                                                 \
+    X(PFNGLCLEARSTENCILPROC, glClearStencil)                                               \
     X(PFNGLBLENDFUNCSEPARATEPROC, glBlendFuncSeparate)                                     \
     X(PFNGLBLENDEQUATIONSEPARATEPROC, glBlendEquationSeparate)                             \
     X(PFNGLBLENDCOLORPROC, glBlendColor)                                                   \
@@ -29,6 +33,8 @@
     X(PFNGLTEXIMAGE2DPROC, glTexImage2D)                                                   \
     X(PFNGLTEXSUBIMAGE2DPROC, glTexSubImage2D)                                             \
     X(PFNGLTEXPARAMETERIPROC, glTexParameteri)                                             \
+    X(PFNGLTEXPARAMETERFPROC, glTexParameterf)                                             \
+    X(PFNGLGETFLOATVPROC, glGetFloatv)                                                     \
     X(PFNGLGENERATEMIPMAPPROC, glGenerateMipmap)                                           \
     X(PFNGLGENBUFFERSPROC, glGenBuffers)                                                   \
     X(PFNGLBINDBUFFERPROC, glBindBuffer)                                                   \
