@@ -168,7 +168,6 @@ HLE(sceKernelRegisterExitCallback) { RET(0); }
 HLE(sceKernelExitGame) { fatal("el juego ha pedido salir (sceKernelExitGame)"); }
 
 // ---------------------------------------------------------------- Utilidades (diálogos, partidas)
-static int g_msg_status = 0, g_save_status = 0;
 HLE(sceUtilityGetSystemParamInt) {
     // 8 = idioma (3 = español), 9 = botón de confirmar (1 = X)
     uint32_t v = A0 == 8 ? 3 : A0 == 9 ? 1 : 0;
@@ -180,44 +179,6 @@ HLE(sceUtilityGetSystemParamString) {
     RET(0);
 }
 HLE(sceUtilityLoadNetModule) { RET(0); }
-HLE(sceUtilityMsgDialogInitStart) {
-    LOGI("utility", "diálogo: %s", mem_str(A0 + 0x30 + 0x1C));
-    g_msg_status = 2;
-    RET(0);
-}
-HLE(sceUtilityMsgDialogUpdate) {
-    if (g_msg_status == 2) g_msg_status = 3;
-    RET(0);
-}
-HLE(sceUtilityMsgDialogGetStatus) {
-    int s = g_msg_status;
-    if (s == 3) g_msg_status = 4;
-    RET(s);
-}
-HLE(sceUtilityMsgDialogShutdownStart) {
-    g_msg_status = 0;
-    RET(0);
-}
-HLE(sceUtilitySavedataInitStart) {
-    LOGI("utility", "savedata modo %u (%s)", R32(A0 + 0x30), mem_str(A0 + 0x3C));
-    W32(A0 + 0x1C, 0x80110307);  // resultado: no hay datos guardados
-    g_save_status = 2;
-    RET(0);
-}
-HLE(sceUtilitySavedataUpdate) {
-    if (g_save_status == 2) g_save_status = 3;
-    RET(0);
-}
-HLE(sceUtilitySavedataGetStatus) {
-    int s = g_save_status;
-    if (s == 3) g_save_status = 4;
-    RET(s);
-}
-HLE(sceUtilitySavedataShutdownStart) {
-    g_save_status = 0;
-    RET(0);
-}
-
 // ---------------------------------------------------------------- Red (multijugador ad hoc)
 // Se inicializa correctamente pero nunca encuentra compañeros: el juego necesita que la pila de red
 // exista (crea un singleton de red al arrancar) aunque no se use.

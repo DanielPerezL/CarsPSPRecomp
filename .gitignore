@@ -9,6 +9,8 @@ build/
 # Texturas volcadas del juego y sus versiones reescaladas
 /textures/
 /texdump/
+# Partidas guardadas del usuario
+/saves/
 
 # Herramientas de terceros clonadas/compiladas localmente
 /third_party/
