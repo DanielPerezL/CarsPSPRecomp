@@ -5,6 +5,7 @@ extracted/
 decrypted/
 dumps/
 ghidra/
+build/
 
 # Herramientas de terceros clonadas/compiladas localmente
 third_party/
