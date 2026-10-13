@@ -5,6 +5,7 @@
 
 #include "gpu/renderer.h"
 #include "platform/window.h"
+#include "ui/overlay.h"
 #include "threads.h"
 
 static uint32_t g_fb_addr = 0, g_fb_stride = 512, g_fb_fmt = 3;
@@ -43,11 +44,13 @@ void display_get_framebuf(uint32_t *addr, uint32_t *stride, uint32_t *fmt) {
     *fmt = g_fb_fmt;
 }
 
+constexpr uint32_t RELOAD_KEY = 0x80000000;  // pseudotecla de prueba: F5 (recargar texturas)
+
 static uint32_t button_mask(const std::string &name) {
     static const struct { const char *n; uint32_t m; } map[] = {
         {"select", 0x1}, {"start", 0x8}, {"up", 0x10}, {"right", 0x20}, {"down", 0x40}, {"left", 0x80},
         {"ltrigger", 0x100}, {"rtrigger", 0x200}, {"triangle", 0x1000}, {"circle", 0x2000},
-        {"cross", 0x4000}, {"square", 0x8000}};
+        {"cross", 0x4000}, {"square", 0x8000}, {"reload", RELOAD_KEY}};
     for (auto &e : map)
         if (name == e.n) return e.m;
     return 0;
@@ -80,13 +83,15 @@ bool display_windowed() { return g_windowed; }
 void display_add_screenshot(double t, const std::string &path) { g_shots.push_back({t, path}); }
 void display_set_exit_after(double t) { g_exit_after = t; }
 
-uint32_t display_buttons_raw() {
+static uint32_t pressed_now() {
     double now = time_us() / 1e6;
     uint32_t mask = g_windowed ? window_pad().buttons : 0;
     for (auto &p : g_presses)
         if (now >= p.t && now < p.t + p.len) mask |= p.mask;
     return mask;
 }
+
+uint32_t display_buttons_raw() { return pressed_now() & ~RELOAD_KEY; }
 
 static bool g_blocked = false, g_wait_release = false;
 
@@ -120,6 +125,14 @@ void display_vblank() {
     if (!window_poll()) {
         LOGI("display", "ventana cerrada");
         exit(0);
+    }
+    static bool reload_held = false;
+    bool reload_test = pressed_now() & RELOAD_KEY, reload_edge = reload_test && !reload_held;
+    reload_held = reload_test;
+    if (window_take_reload_request() || reload_edge) {
+        char msg[96];
+        snprintf(msg, sizeof(msg), "Texturas recargadas: %d sustituciones", renderer_reload_textures());
+        overlay_toast(msg);
     }
     if (!renderer_interpolating()) renderer_present(g_fb_addr, g_fb_stride, g_fb_fmt);
     double now = time_us() / 1e6;

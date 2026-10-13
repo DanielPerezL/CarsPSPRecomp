@@ -26,6 +26,13 @@ bool gl_load_functions() {
 static SDL_Window *g_window = nullptr;
 static SDL_GLContext g_gl = nullptr;
 static SDL_GameController *g_pad = nullptr;
+static bool g_reload_request = false;
+
+bool window_take_reload_request() {
+    bool r = g_reload_request;
+    g_reload_request = false;
+    return r;
+}
 
 enum : uint32_t {
     BTN_SELECT = 0x1, BTN_START = 0x8, BTN_UP = 0x10, BTN_RIGHT = 0x20, BTN_DOWN = 0x40, BTN_LEFT = 0x80,
@@ -81,6 +88,7 @@ bool window_poll() {
         if (e.type == SDL_QUIT) return false;
         overlay_event(&e);
         if (e.type == SDL_CONTROLLERDEVICEADDED && !g_pad) g_pad = SDL_GameControllerOpen(e.cdevice.which);
+        if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F5 && !e.key.repeat) g_reload_request = true;
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) {
             bool fs = SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN_DESKTOP;
             SDL_SetWindowFullscreen(g_window, fs ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);

@@ -716,7 +716,7 @@ void render_interpolated(float t) {
 
 bool renderer_init(const RendererConfig &cfg) {
     g_cfg = cfg;
-    // Filtrado anisotrópico para las texturas reescaladas (núcleo en GL 4.6; extensión casi universal antes).
+    // Filtrado anisotrópico para las texturas en alta resolución (núcleo en GL 4.6; extensión casi universal antes).
     if (SDL_GL_ExtensionSupported("GL_ARB_texture_filter_anisotropic") ||
         SDL_GL_ExtensionSupported("GL_EXT_texture_filter_anisotropic")) {
         glGetFloatv(GL_MAX_TEXTURE_MAX_ANISOTROPY, &g_max_aniso);
@@ -919,6 +919,14 @@ bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     blit_to_window(g_last.display, g_last.stride, g_last.fmt);
     count_stats(false);
     return true;
+}
+
+int renderer_reload_textures() {
+    int n = texrep_rescan();
+    // Se conservan los nombres de textura de GL (los fotogramas grabados los usan); solo se fuerza la
+    // nueva subida en su próximo uso.
+    for (auto &[key, ct] : g_textures) ct.hash = 0;
+    return n;
 }
 
 bool renderer_screenshot(const std::string &path) {

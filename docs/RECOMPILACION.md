@@ -24,7 +24,7 @@ Para regenerar el fichero de símbolos hace falta Ghidra 12.1.3 + ghidra-allegre
 Depuración: `-v` muestra el estado de los hilos cada segundo; `-vv` traza todas las llamadas al
 sistema con el hilo que las hace. Pruebas sin ventana visible: `--hidden`, `--screenshot T:fichero.ppm`,
 `--exit-after T`, `--record-audio f.wav` (con `SDL_AUDIODRIVER=dummy`), y `CARS_PRESS="T:botón[:dur],..."`
-para simular pulsaciones. `--check-sp` en el recompilador añade comprobaciones de `$sp`.
+para simular pulsaciones (`reload` simula F5). `--check-sp` en el recompilador añade comprobaciones de `$sp`.
 Gráficos: `CARS_GE_DUMP=T` (con `-v`) registra el estado de la GE de cada dibujo del primer fotograma tras el
 segundo T (blend, test de alfa, stencil, texturas y, en los dibujos pequeños, vértices en coordenadas de
 pantalla); con `CARS_GE_DUMP_DIR=carpeta` guarda además cada textura tal y como se usa (con su paleta).
@@ -69,9 +69,10 @@ Decisiones del runtime:
 - **Stencil:** en la PSP es el canal alfa del framebuffer; aquí se usa el stencil del FBO (test, operaciones,
   máscara de escritura de 0xE9 y borrado con el alfa en modo *clear*). El minimapa lo usa para recortarse
   al círculo.
-- **Texturas reescaladas:** mipmaps solo hasta la resolución original (la PSP no los usa aquí) y filtrado
-  anisotrópico. Con la cadena completa, un quad muy estrecho (la barra de nitro) promediaba el alfa de
-  zonas transparentes y aparecía como una franja semitransparente.
+- **Texturas sustituidas en alta resolución:** mipmaps solo hasta la resolución original (la PSP no los usa
+  aquí) y filtrado anisotrópico. Con la cadena completa, un quad muy estrecho (la barra de nitro) promediaba
+  el alfa de zonas transparentes y aparecía como una franja semitransparente. F5 vuelve a leer la carpeta
+  de sustituciones y fuerza la subida de cada textura en su próximo uso.
 - **Diálogos del sistema** (`sceUtilityMsgDialog`): en la PSP los dibuja el firmware encima de la escena
   del juego, que sigue renderizando y llama a `Update` en cada fotograma. Aquí se dibujan con Dear ImGui
   sobre la ventana, a su resolución real y escalados al rectángulo de 480x272 (`ui/overlay.cpp`); el HLE

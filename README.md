@@ -2,7 +2,7 @@
 
 Recompilación estática de *Disney·Pixar Cars* para PSP (ULES00324, versión española) a un ejecutable
 nativo de PC, con resolución libre, fotogramas interpolados por encima de 120 fps y texturas
-reescaladas con IA.
+sustituibles.
 
 El ejecutable del juego se traduce instrucción a instrucción a C y se enlaza con un runtime propio que
 sustituye al sistema de la PSP (HLE). La lógica, la física y la IA son las originales, sin emulación de
@@ -20,7 +20,7 @@ CPU.
 | Gráficos a 480x272 × N (por defecto 1920x1088) | ✅ |
 | Fotogramas interpolados (lógica a 30, presentación a la frecuencia del monitor) | ✅ |
 | Música (ATRAC3+), efectos (SAS) y vídeos (PSMF) | ✅ |
-| Sustitución de texturas + reescalado con IA | ✅ |
+| Exportación y sustitución de texturas (recarga en caliente con F5) | ✅ |
 | Multijugador ad hoc | ❌ (la red se inicializa, nunca hay rivales) |
 | Diálogos del sistema (mando, teclado o ratón) | ✅ |
 | Windows (MSYS2/MinGW-w64) | 🚧 preparado, pendiente de probar |
@@ -66,7 +66,7 @@ ejecutable de tu ISO, comprueba que es la versión soportada, lo recompila y com
 | L / R | Q / W | LB / RB o gatillos |
 | Start / Select | Intro / Retroceso | Start / Back |
 
-F11 alterna la pantalla completa. En los diálogos del sistema también valen el ratón, Intro y Escape.
+F11 alterna la pantalla completa y F5 recarga las texturas propias. En los diálogos del sistema también valen el ratón, Intro y Escape.
 
 ## Opciones
 
@@ -76,21 +76,25 @@ F11 alterna la pantalla completa. En los diálogos del sistema también valen el
 --no-interpolation   30 fps como en la PSP
 --fullscreen         pantalla completa
 --textures DIR       texturas de sustitución <hash>.png (por defecto textures/)
---dump-textures DIR  vuelca las texturas originales para reescalarlas
+--dump-textures DIR  vuelca las texturas originales para editarlas
 --ui-font FICHERO    fuente TTF de los diálogos (por defecto Noto Sans, DejaVu Sans o Segoe UI)
 ```
 
-## Texturas reescaladas con IA
+## Texturas propias
+
+Puedes exportar las texturas del juego, editarlas y ver los cambios en el juego sin reiniciarlo.
 
 ```bash
-build/cars --iso juego.iso --dump-textures texdump     # juega: se vuelcan las texturas que aparezcan
-python3 tools/textures/upscale.py texdump textures     # x4 con Real-ESRGAN (ncnn/Vulkan)
-build/cars --iso juego.iso                             # usa textures/ automáticamente
+build/cars --iso juego.iso --dump-textures texdump   # 1. juega: se guardan las texturas que aparezcan
+mkdir -p textures && cp texdump/<hash>.png textures/  # 2. copia las que quieras cambiar y edítalas
+build/cars --iso juego.iso                           # 3. textures/ se carga automáticamente
 ```
 
-`upscale.py` necesita [realesrgan-ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN/releases) en
-`~/tools/realesrgan/` (o `--esrgan RUTA`). Respeta el canal alfa y evita costuras en las texturas que se
-repiten.
+- Cada textura se llama por el hash de su contenido (`<hash>.png`), estable entre partidas.
+- La versión editada puede tener el mismo tamaño o más resolución, siempre que mantenga la proporción
+  (128x64 → 512x256). El canal alfa se respeta.
+- **F5** recarga la carpeta `textures/` en caliente: edita, guarda y pulsa F5 para verlo en el juego.
+- Una misma imagen con otra paleta tiene otro hash (p. ej. los coches con varios colores).
 
 ## Contribuir
 
@@ -116,8 +120,7 @@ python3 tools/check_repo.py --history   # revisa todo el historial antes de publ
 - [pspdecrypt](https://github.com/John-K/pspdecrypt) (GPL-3.0): descifrado del ejecutable.
 - [Ghidra](https://github.com/NationalSecurityAgency/ghidra) y [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex): análisis.
 - [SDL2](https://www.libsdl.org/), [FFmpeg](https://ffmpeg.org/), [stb](https://github.com/nothings/stb),
-  [Dear ImGui](https://github.com/ocornut/imgui) (MIT),
-  [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN).
+  [Dear ImGui](https://github.com/ocornut/imgui) (MIT).
 - Inspirado en [N64Recomp](https://github.com/N64Recomp/N64Recomp) y RT64.
 
 *Cars* es © Disney/Pixar. Este proyecto no está afiliado a Disney, Pixar, THQ ni Sony.

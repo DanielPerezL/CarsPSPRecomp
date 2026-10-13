@@ -28,19 +28,26 @@ std::string texrep_name(uint64_t hash) {
     return buf;
 }
 
+int texrep_rescan() {
+    g_available.clear();
+    std::error_code ec;
+    if (fs::is_directory(g_replace_dir, ec)) {
+        for (const auto &e : fs::directory_iterator(g_replace_dir, ec)) {
+            unsigned long long h;
+            char ext[8];
+            if (sscanf(e.path().filename().string().c_str(), "%16llx.%4s", &h, ext) == 2) g_available.insert(h);
+        }
+        LOGI("tex", "%zu texturas de sustitución en %s", g_available.size(), g_replace_dir.c_str());
+    }
+    return (int)g_available.size();
+}
+
 void texrep_init(const std::string &replace_dir, const std::string &dump_dir) {
     g_replace_dir = replace_dir;
     g_dump_dir = dump_dir;
     std::error_code ec;
     if (!dump_dir.empty()) fs::create_directories(dump_dir, ec);
-    if (fs::is_directory(replace_dir, ec)) {
-        for (const auto &e : fs::directory_iterator(replace_dir, ec)) {
-            unsigned long long h;
-            char ext[8];
-            if (sscanf(e.path().filename().string().c_str(), "%16llx.%4s", &h, ext) == 2) g_available.insert(h);
-        }
-        LOGI("tex", "%zu texturas de sustitución en %s", g_available.size(), replace_dir.c_str());
-    }
+    texrep_rescan();
 }
 
 bool texrep_load(uint64_t hash, std::vector<uint8_t> &rgba, int &w, int &h) {

@@ -15,6 +15,8 @@ bool window_init(const WindowConfig &cfg);
 void window_shutdown();
 // Procesa eventos; devuelve false si el usuario cierra la ventana.
 bool window_poll();
+// F5 pulsada desde la última consulta (recargar texturas).
+bool window_take_reload_request();
 void window_swap();
 void window_drawable_size(int *w, int *h);
 

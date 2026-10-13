@@ -32,5 +32,7 @@ void renderer_flip(uint32_t fb_addr, uint32_t stride, uint32_t fmt);
 bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt);
 // Microsegundos hasta la próxima presentación interpolada (para el planificador).
 uint64_t renderer_next_present_in();
+// Recarga las texturas de sustitución (F5): se vuelven a resolver en su próximo uso.
+int renderer_reload_textures();
 // Captura el último fotograma presentado a un PPM.
 bool renderer_screenshot(const std::string &path);

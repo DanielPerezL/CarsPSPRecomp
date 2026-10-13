@@ -10,7 +10,7 @@ decrypted/
 dumps/
 ghidra/
 build/
-# Texturas volcadas del juego y sus versiones reescaladas
+# Texturas volcadas del juego y sus versiones editadas
 /textures/
 /texdump/
 # Partidas guardadas del usuario

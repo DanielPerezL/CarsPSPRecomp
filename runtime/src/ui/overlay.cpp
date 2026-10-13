@@ -23,6 +23,8 @@ std::string g_font_path;
 float g_font_px = 0;  // tamaño con el que está generado el atlas de la fuente
 float g_alpha = 0;    // aparición/desaparición del diálogo
 uint64_t g_last_us = 0;
+std::string g_toast;
+double g_toast_until = 0;  // segundos (SDL_GetTicks)
 
 // Fuentes libres habituales de cada sistema (con acentos y ñ). Sin ninguna, la de ImGui.
 std::string find_font() {
@@ -205,7 +207,25 @@ void draw_dialog(ImDrawList *dl) {
     }
 }
 
+void draw_toast(ImDrawList *dl) {
+    double now = SDL_GetTicks64() / 1000.0;
+    float a = (float)std::min(1.0, (g_toast_until - now) / 0.4);  // se desvanece al final
+    Screen sc = screen_rect();
+    ImFont *font = ImGui::GetFont();
+    float fs = 11 * sc.s;
+    ImVec2 size = font->CalcTextSizeA(fs, FLT_MAX, 0, g_toast.c_str());
+    ImVec2 p0 = sc.p(8, 8), p1{p0.x + size.x + 12 * sc.s, p0.y + size.y + 8 * sc.s};
+    dl->AddRectFilled(p0, p1, IM_COL32(0, 0, 0, (int)(170 * a)), 4 * sc.s);
+    dl->AddText(font, fs, {p0.x + 6 * sc.s, p0.y + 4 * sc.s}, IM_COL32(255, 255, 255, (int)(255 * a)), g_toast.c_str());
+}
+
 }  // namespace
+
+void overlay_toast(const std::string &text) {
+    g_toast = text;
+    g_toast_until = SDL_GetTicks64() / 1000.0 + 2.5;
+    LOGI("ui", "%s", text.c_str());
+}
 
 bool overlay_init(void *sdl_window, void *gl_context, const char *font) {
     g_window = static_cast<SDL_Window *>(sdl_window);
@@ -244,7 +264,8 @@ void overlay_render() {
     g_last_us = now;
     float target = g_dialog.visible ? 1.f : 0.f;
     g_alpha = g_alpha < target ? std::min(target, g_alpha + dt / 0.15f) : std::max(target, g_alpha - dt / 0.15f);
-    if (g_alpha <= 0) return;
+    bool toast = SDL_GetTicks64() / 1000.0 < g_toast_until;
+    if (g_alpha <= 0 && !toast) return;
 
     // El atlas de la fuente se regenera al tamaño real en pantalla para que el texto sea nítido.
     int ww, wh;
@@ -255,7 +276,8 @@ void overlay_render() {
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplSDL2_NewFrame();
     ImGui::NewFrame();
-    draw_dialog(ImGui::GetForegroundDrawList());
+    if (g_alpha > 0) draw_dialog(ImGui::GetForegroundDrawList());
+    if (toast) draw_toast(ImGui::GetForegroundDrawList());
     ImGui::Render();
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 }
