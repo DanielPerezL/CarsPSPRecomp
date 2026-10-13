@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Recompilador estático Allegrex (PSP) -> C.
 
-Uso: recomp.py EBOOT.elf funcs.csv --out build/gen
+Uso: recomp.py EBOOT.elf tools/recomp/games/ULES00324.funcs.csv --out build/gen
 
 - Cada función MIPS pasa a `void f_XXXXXXXX(Ctx *c)`; los saltos internos son `goto`.
 - Límites de función: los de Ghidra (funcs.csv) + destinos de punteros en datos que no
@@ -440,8 +440,17 @@ def main():
 
     ghidra = []
     for line in args.funcs.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
         a, _, size = line.split(",")
         ghidra.append((int(a, 16), int(size)))
+    # el fichero de símbolos documenta el hash del EBOOT para el que se generó
+    import hashlib
+    expected = [l.split(":")[1].strip() for l in args.funcs.read_text().splitlines()
+                if l.startswith("# sha256 EBOOT descifrado")]
+    actual = hashlib.sha256(args.elf.read_bytes()).hexdigest()
+    if expected and expected[0] != actual:
+        print(f"AVISO: el EBOOT ({actual[:16]}...) no es el del fichero de símbolos ({expected[0][:16]}...)")
     ghidra.sort()
     g_starts = [a for a, _ in ghidra]
 
@@ -525,7 +534,12 @@ def main():
         f.write(",\n".join(f"  0x{a:08x}u" for a in all_funcs) + "\n};\n")
         f.write("const RecompFunc g_recomp_funcs[] = {\n")
         f.write(",\n".join(f"  f_{a:08x}" for a in all_funcs) + "\n};\n")
-    names = load_nids(Path(__file__).resolve().parents[2] / "third_party" / "ppsspp" / "Core" / "HLE")
+    nids_csv = args.funcs.with_name(args.funcs.name.replace(".funcs.csv", ".nids.csv"))
+    if nids_csv.exists():
+        names = {int(n, 16): name for n, name in
+                 (l.split(",") for l in nids_csv.read_text().splitlines() if l and not l.startswith("#"))}
+    else:
+        names = load_nids(Path(__file__).resolve().parents[2] / "third_party" / "ppsspp" / "Core" / "HLE")
     gp = img.u32(img.sections[".rodata.sceModuleInfo"].addr + 0x20)
     with open(args.out / "imports.c", "w") as f:
         f.write('#include "recomp.h"\n\n')

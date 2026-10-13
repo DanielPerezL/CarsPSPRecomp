@@ -3,38 +3,28 @@
 El ejecutable del juego (`EBOOT.BIN`, MIPS Allegrex) se traduce a C y se enlaza con un runtime propio
 que sustituye al sistema de la PSP (HLE). El resultado es un binario nativo que lee la ISO original.
 
-Nada derivado del juego se versiona: la ISO, `decrypted/`, `ghidra/` y `build/` (que incluye el C generado)
-están en `.gitignore`. Cada usuario genera todo a partir de su propia copia.
-
-## Requisitos
-
-- `gcc`/`g++` (C11/C++17), `make`, Python 3.
-- `third_party/pspdecrypt` compilado (ver historial) para descifrar el EBOOT.
-- `third_party/pylib/rabbitizer` (wheel de PyPI descomprimido) y `third_party/ppsspp` (checkout parcial de
-  `Core/HLE` y `Core/MIPS`, solo para la tabla de NIDs y como referencia).
-- Ghidra 12.1.3 + ghidra-allegrex, para la lista de funciones (`ghidra/funcs.csv`).
+Nada derivado del juego se versiona: la ISO, `decrypted/`, `ghidra/`, `build/` (con el C generado),
+`textures/`, `texdump/` y `saves/` están en `.gitignore`. Lo único específico del juego que hay en el
+repositorio es el fichero de símbolos (`tools/recomp/games/ULES00324.*.csv`: direcciones de funciones y
+nombres de imports), que solo contiene metadatos.
 
 ## Proceso
 
+`tools/setup.py --iso juego.iso` hace todo; por partes:
+
 ```bash
-# 1. Descifrar el ejecutable
-third_party/pspdecrypt/pspdecrypt extracted/PSP_GAME/SYSDIR/EBOOT.BIN -o decrypted/EBOOT.elf
-
-# 2. Análisis en Ghidra y exportación de funciones
-tools/ghidra_pipeline.sh
-~/tools/ghidra_12.1.3_PUBLIC/support/analyzeHeadless ghidra Cars -process EBOOT.elf -noanalysis -readOnly \
-    -scriptPath tools/ghidra_scripts -postScript ExportFunctions.java ghidra/funcs.csv
-
-# 3. Recompilar a C (build/gen) y compilar
-python3 tools/recomp/recomp.py decrypted/EBOOT.elf ghidra/funcs.csv --out build/gen [--check-sp]
+python3 tools/recomp/recomp.py build/EBOOT.elf tools/recomp/games/ULES00324.funcs.csv --out build/gen
 make -C runtime -j$(nproc)
-
-# 4. Ejecutar
-build/cars --iso "Disney-Pixar Cars (Spain).iso" [-v | -vv]
+build/cars --iso juego.iso [-v | -vv]
 ```
 
-`-v` muestra el estado de los hilos cada segundo; `-vv` traza todas las llamadas al sistema con el hilo que
-las hace. `CARS_PRESS="2.5:start,4:cross"` simula pulsaciones (segundos:botón) mientras no hay ventana.
+Para regenerar el fichero de símbolos hace falta Ghidra 12.1.3 + ghidra-allegrex
+(`tools/ghidra_pipeline.sh` y el script `ExportFunctions.java`).
+
+Depuración: `-v` muestra el estado de los hilos cada segundo; `-vv` traza todas las llamadas al
+sistema con el hilo que las hace. Pruebas sin ventana visible: `--hidden`, `--screenshot T:fichero.ppm`,
+`--exit-after T`, `--record-audio f.wav` (con `SDL_AUDIODRIVER=dummy`), y `CARS_PRESS="T:botón[:dur],..."`
+para simular pulsaciones. `--check-sp` en el recompilador añade comprobaciones de `$sp`.
 
 ## Arquitectura
 
@@ -47,21 +37,35 @@ las hace. `CARS_PRESS="2.5:start,4:cross"` simula pulsaciones (segundos:botón) 
 | HLE | `runtime/src/hle_*.cpp` | Manejadores por nombre (`HLE(sceXxx)`); NID→nombre generado |
 | VFPU | `runtime/src/vfpu.cpp` | Una función por operación, semántica de PPSSPP |
 | UMD | `runtime/src/iso.cpp` | ISO9660 directo, incluido el acceso `sce_lbn0x…_size0x…` |
-| GE | `runtime/src/hle_ge.cpp` | F0: solo control de flujo de las display lists, sin dibujar |
+| GE | `runtime/src/gpu/ge.cpp` | Display lists, vértices (skinning/morph en CPU), primitivas |
+| Render | `runtime/src/gpu/renderer_gl.cpp` | OpenGL 3.3; tubería fija de la PSP en shaders; FBO por framebuffer |
+| Interpolación | `runtime/src/gpu/renderer_gl.cpp` | Graba cada fotograma lógico y reproduce interpolando matrices |
+| Texturas | `runtime/src/gpu/texture*.cpp` | Todos los formatos; caché y sustitución por hash |
+| Audio | `runtime/src/audio/` | sceAudio (SDL), SAS (de PPSSPP), ATRAC3/3+ (libavcodec) |
+| Vídeo | `runtime/src/media/mpeg.cpp` | Ring buffer + demux MPEG-PS propio + H.264/ATRAC3+ |
+| Partidas | `runtime/src/hle_savedata.cpp` | `saves/PSP/SAVEDATA/<juego><partida>/` |
 
 Decisiones del recompilador que no son obvias:
 
 - **Límites de función:** Ghidra + todos los destinos de `jal` + punteros a código en datos y pares
-  `lui/addiu` (relocalizaciones HI16/LO16). Los destinos de tablas de salto (series de punteros consecutivos
-  en `.rodata`) se tratan como etiquetas de `switch`, no como funciones.
+  `lui/addiu` (relocalizaciones HI16/LO16). Los destinos de tablas de salto (series de punteros
+  consecutivos en `.rodata`) se tratan como etiquetas de `switch`, no como funciones.
 - **setjmp/longjmp** de la libc del juego (detectados por patrón): `setjmp` del host en el marco C del
   llamador y `recomp_longjmp` restaura registros MIPS y salta a ese marco.
 - **Hueco de retardo** de los saltos: se emite antes de evaluar el destino (la condición se calcula antes).
 
+Decisiones del runtime:
+
+- **GE:** `FINISH+END` termina una lista, pero `SIGNAL+END` es una señal y la lista sigue. El juego
+  depende de ello para saber que la GPU ha terminado (si no, su FrameWatchdog lo limita a ~7 fps).
+- **Interpolación:** cada dibujo se empareja con el del fotograma anterior por (origen de vértices,
+  formato, nº de vértices, textura, primitiva) + orden de aparición; se interpolan matrices y, en mallas
+  con skinning, vértices. El 2D y los cortes de cámara no se interpolan. Un fotograma lógico de latencia.
+- **Framebuffers escritos por la CPU** (vídeos vía DMA) se presentan desde memoria hasta que la GE vuelva
+  a dibujar en ellos.
+
 ## Estado
 
-- **F0 (hecho):** el juego arranca, inicializa RenderWare, carga datos del UMD y mantiene su bucle principal
-  enviando display lists a la GE de forma continua.
-- **Siguiente:** renderizador de la GE sobre Vulkan/OpenGL (resolución libre), ventana y mandos, audio
-  (SAS + ATRAC3+), vídeo PMF y fuentes PGF; después interpolación de fotogramas para >120 fps y sustitución
-  de texturas/modelos.
+- Jugable: arranque, vídeos, menús, partidas guardadas y carreras con sonido.
+- Pendiente: multijugador ad hoc, interfaz para los diálogos del sistema, fuentes PGF del sistema,
+  reverberación del SAS, port a Windows.
