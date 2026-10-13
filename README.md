@@ -91,6 +91,16 @@ build/cars --iso juego.iso                             # usa textures/ automáti
 `~/tools/realesrgan/` (o `--esrgan RUTA`). Respeta el canal alfa y evita costuras en las texturas que se
 repiten.
 
+## Contribuir
+
+El repositorio no puede contener nada del juego (ISO, ejecutables, assets, volcados, capturas ni
+conversiones). Activa la comprobación automática en cada commit:
+
+```bash
+git config core.hooksPath .githooks
+python3 tools/check_repo.py --history   # revisa todo el historial antes de publicar
+```
+
 ## Documentación
 
 - [docs/RECOMPILACION.md](docs/RECOMPILACION.md): arquitectura del recompilador y del runtime.

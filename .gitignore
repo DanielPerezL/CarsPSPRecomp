@@ -1,6 +1,10 @@
-# Material con copyright (Disney/THQ): nunca subir ni redistribuir
+# Material con copyright (Disney/THQ/Sony): nunca subir ni redistribuir.
+# tools/check_repo.py lo comprueba en cada commit (git config core.hooksPath .githooks).
 *.iso
 *.ISO
+*.cso
+*.pbp
+*.PBP
 extracted/
 decrypted/
 dumps/
@@ -11,6 +15,11 @@ build/
 /texdump/
 # Partidas guardadas del usuario
 /saves/
+# Capturas, conversiones de modelos y audio/vídeo extraídos
+*.ppm
+*.glb
+*.gltf
+*.wav
 
 # Herramientas de terceros clonadas/compiladas localmente
 /third_party/
