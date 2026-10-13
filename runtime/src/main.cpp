@@ -22,6 +22,7 @@ static void usage() {
             "  --dump-textures DIR vuelca las texturas originales como <hash>.png\n"
             "  --fullscreen        pantalla completa (F11 alterna)\n"
             "  --vsync             sincronizar con el monitor\n"
+            "  --ui-font FICHERO   fuente TTF de los diálogos (por defecto, una del sistema)\n"
             "  --headless          sin ventana ni renderizado (solo lógica)\n"
             "  --hidden            ventana oculta (pruebas automáticas con capturas)\n"
             "  --screenshot T:F    captura en el segundo T al fichero F (.ppm); repetible\n"
@@ -54,6 +55,7 @@ int main(int argc, char **argv) {
         else if (a == "--size" && i + 1 < argc) sscanf(argv[++i], "%dx%d", &wcfg.width, &wcfg.height);
         else if (a == "--fullscreen") wcfg.fullscreen = true;
         else if (a == "--vsync") wcfg.vsync = true;
+        else if (a == "--ui-font" && i + 1 < argc) wcfg.ui_font = argv[++i];
         else if (a == "--headless") headless = true;
         else if (a == "--record-audio" && i + 1 < argc) record_audio = argv[++i];
         else if (a == "--hidden") wcfg.hidden = true;

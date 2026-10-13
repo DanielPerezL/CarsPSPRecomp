@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "../core.h"
 #include "../platform/window.h"
+#include "../ui/overlay.h"
 #include "gl_funcs.h"
 #include "renderer.h"
 #include "texture.h"
@@ -218,6 +220,7 @@ std::unordered_map<std::string, GLint> g_loc;
 std::unordered_map<uint32_t, Target> g_targets;
 std::unordered_map<uint64_t, CachedTex> g_textures;
 Target *g_presented = nullptr;
+std::string g_pending_shot;
 GLuint g_cpu_tex = 0, g_cpu_fbo = 0;
 std::vector<uint8_t> g_rgba;
 
@@ -541,6 +544,28 @@ void execute(const DrawCmd &d) {
     execute(d.snap, d.prim, d.verts.data(), (int)d.verts.size(), d.snap.world, d.snap.view, d.snap.proj);
 }
 
+// Dibuja la interfaz propia encima, hace la captura pendiente (lo mismo que se ve) y presenta.
+void finish_window() {
+    overlay_render();
+    if (!g_pending_shot.empty()) {
+        int w, h;
+        window_drawable_size(&w, &h);
+        std::vector<uint8_t> px((size_t)w * h * 4);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        if (FILE *f = fopen(g_pending_shot.c_str(), "wb")) {
+            fprintf(f, "P6\n%d %d\n255\n", w, h);
+            for (int y = h - 1; y >= 0; y--)
+                for (int x = 0; x < w; x++) fwrite(&px[((size_t)y * w + x) * 4], 1, 3, f);
+            fclose(f);
+            LOGI("gpu", "captura %s (%dx%d)", g_pending_shot.c_str(), w, h);
+        }
+        g_pending_shot.clear();
+    }
+    window_swap();
+}
+
 // Copia el framebuffer de la PSP (FBO o memoria si lo escribió la CPU) a la ventana con bandas.
 void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     int ww, wh;
@@ -586,7 +611,7 @@ void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
         sw = 480;
         sh = 272;
     } else {
-        window_swap();
+        finish_window();
         return;
     }
     float aspect = 480.f / 272.f;
@@ -597,7 +622,7 @@ void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
     glBlitFramebuffer(0, 0, sw, sh, dx, dy, dx + dw, dy + dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    window_swap();
+    finish_window();
 }
 
 // ---------------------------------------------------------------- interpolación
@@ -794,18 +819,6 @@ bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
 }
 
 bool renderer_screenshot(const std::string &path) {
-    Target *t = g_presented;
-    int w = t ? t->w * g_cfg.scale : 480, h = t ? t->h * g_cfg.scale : 272;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, t ? t->fbo : g_cpu_fbo);
-    std::vector<uint8_t> px((size_t)w * h * 4);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-    FILE *f = fopen(path.c_str(), "wb");
-    if (!f) return false;
-    fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (int y = h - 1; y >= 0; y--)
-        for (int x = 0; x < w; x++) fwrite(&px[((size_t)y * w + x) * 4], 1, 3, f);
-    fclose(f);
-    LOGI("gpu", "captura %s (%dx%d)", path.c_str(), w, h);
+    g_pending_shot = path;  // se captura en la próxima presentación, con la interfaz incluida
     return true;
 }

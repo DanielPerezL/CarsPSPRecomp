@@ -63,9 +63,15 @@ Decisiones del runtime:
   con skinning, vértices. El 2D y los cortes de cámara no se interpolan. Un fotograma lógico de latencia.
 - **Framebuffers escritos por la CPU** (vídeos vía DMA) se presentan desde memoria hasta que la GE vuelva
   a dibujar en ellos.
+- **Diálogos del sistema** (`sceUtilityMsgDialog`): en la PSP los dibuja el firmware encima de la escena
+  del juego, que sigue renderizando y llama a `Update` en cada fotograma. Aquí se dibujan con Dear ImGui
+  sobre la ventana, a su resolución real y escalados al rectángulo de 480x272 (`ui/overlay.cpp`); el HLE
+  (`hle_dialog.cpp`) sigue la máquina de estados y las opciones de PPSSPP. Mientras están abiertos, el
+  juego no recibe los botones, ni tampoco la pulsación que los cierra. Las partidas solo usan los modos
+  automáticos de Savedata, que en la PSP no muestran interfaz.
 
 ## Estado
 
 - Jugable: arranque, vídeos, menús, partidas guardadas y carreras con sonido.
-- Pendiente: multijugador ad hoc, interfaz para los diálogos del sistema, fuentes PGF del sistema,
+- Pendiente: multijugador ad hoc, fuentes PGF del sistema,
   reverberación del SAS, port a Windows.

@@ -8,6 +8,7 @@ struct WindowConfig {
     bool fullscreen = false;
     bool hidden = false;  // pruebas automáticas: sin ventana visible, se renderiza igual a los FBO
     bool vsync = false;
+    std::string ui_font;  // TTF de la interfaz propia (vacío = una del sistema)
 };
 
 bool window_init(const WindowConfig &cfg);

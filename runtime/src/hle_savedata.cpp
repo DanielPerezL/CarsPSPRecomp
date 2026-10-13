@@ -1,4 +1,4 @@
-// sceUtility: partidas guardadas (Savedata) y diálogos de mensaje del sistema.
+// sceUtility: partidas guardadas (Savedata). Los diálogos de mensaje están en hle_dialog.cpp.
 // Las partidas se guardan sin cifrar en <saves>/PSP/SAVEDATA/<juego><partida>/, con la misma
 // estructura que en el Memory Stick: el fichero de datos, PARAM.BIN (parámetros SFO) e ICON0.PNG.
 // Estructuras y códigos según PPSSPP (Core/Dialog/SavedataParam.*).
@@ -21,7 +21,7 @@ constexpr uint32_t P_RESULT = 0x1C, P_MODE = 0x30, P_GAME = 0x3C, P_SAVE = 0x4C,
 constexpr uint32_t ERR_LOAD_NO_DATA = 0x80110307, ERR_SIZES_NO_DATA = 0x801103C7, ERR_DELETE_NO_DATA = 0x80110347;
 constexpr uint32_t CLUSTER = 0x8000;
 
-int g_save_status = 0, g_msg_status = 0;
+int g_save_status = 0;
 
 std::string str(uint32_t addr, size_t max) { return std::string(mem_str(addr), strnlen(mem_str(addr), max)); }
 
@@ -192,27 +192,5 @@ HLE(sceUtilitySavedataUpdate) {
 HLE(sceUtilitySavedataGetStatus) { RET(g_save_status); }
 HLE(sceUtilitySavedataShutdownStart) {
     g_save_status = 0;
-    RET(0);
-}
-
-// ---------------------------------------------------------------- diálogo de mensaje
-// Sin interfaz propia todavía: se registra el texto y se responde automáticamente
-// (CARS_DIALOG_ANSWER=yes|no, por defecto sí).
-HLE(sceUtilityMsgDialogInitStart) {
-    uint32_t p = A0;
-    LOGI("utility", "diálogo: %s", mem_str(p + 0x3C));
-    const char *ans = getenv("CARS_DIALOG_ANSWER");
-    W32(p + 0x1C, 0);                                       // resultado
-    W32(p + 0x240, ans && !strcmp(ans, "no") ? 2 : 1);      // botón pulsado: 1 = sí, 2 = no
-    g_msg_status = 2;
-    RET(0);
-}
-HLE(sceUtilityMsgDialogUpdate) {
-    if (g_msg_status == 2) g_msg_status = 3;
-    RET(0);
-}
-HLE(sceUtilityMsgDialogGetStatus) { RET(g_msg_status); }
-HLE(sceUtilityMsgDialogShutdownStart) {
-    g_msg_status = 0;
     RET(0);
 }

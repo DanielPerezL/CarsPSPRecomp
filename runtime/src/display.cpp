@@ -75,10 +75,12 @@ void display_init(bool windowed) {
     }
 }
 
+bool display_windowed() { return g_windowed; }
+
 void display_add_screenshot(double t, const std::string &path) { g_shots.push_back({t, path}); }
 void display_set_exit_after(double t) { g_exit_after = t; }
 
-uint32_t display_buttons() {
+uint32_t display_buttons_raw() {
     double now = time_us() / 1e6;
     uint32_t mask = g_windowed ? window_pad().buttons : 0;
     for (auto &p : g_presses)
@@ -86,9 +88,27 @@ uint32_t display_buttons() {
     return mask;
 }
 
+static bool g_blocked = false, g_wait_release = false;
+
+void display_block_input(bool block) {
+    g_blocked = block;
+    if (!block) g_wait_release = true;
+}
+
+static bool input_blocked() {
+    if (g_wait_release && !g_blocked) {
+        PadState p = g_windowed ? window_pad() : PadState{};
+        bool centered = p.lx > 64 && p.lx < 192 && p.ly > 64 && p.ly < 192;
+        if (display_buttons_raw() == 0 && centered) g_wait_release = false;
+    }
+    return g_blocked || g_wait_release;
+}
+
+uint32_t display_buttons() { return input_blocked() ? 0 : display_buttons_raw(); }
+
 void display_analog(uint8_t *lx, uint8_t *ly) {
     *lx = *ly = 128;
-    if (g_windowed) {
+    if (g_windowed && !input_blocked()) {
         PadState p = window_pad();
         *lx = p.lx;
         *ly = p.ly;

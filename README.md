@@ -22,7 +22,7 @@ CPU.
 | Música (ATRAC3+), efectos (SAS) y vídeos (PSMF) | ✅ |
 | Sustitución de texturas + reescalado con IA | ✅ |
 | Multijugador ad hoc | ❌ (la red se inicializa, nunca hay rivales) |
-| Diálogos del sistema con interfaz | ❌ (se responden solos) |
+| Diálogos del sistema (mando, teclado o ratón) | ✅ |
 | Windows (MSYS2/MinGW-w64) | 🚧 preparado, pendiente de probar |
 
 ## Requisitos (Linux)
@@ -66,7 +66,7 @@ ejecutable de tu ISO, comprueba que es la versión soportada, lo recompila y com
 | L / R | Q / W | LB / RB o gatillos |
 | Start / Select | Intro / Retroceso | Start / Back |
 
-F11 alterna la pantalla completa.
+F11 alterna la pantalla completa. En los diálogos del sistema también valen el ratón, Intro y Escape.
 
 ## Opciones
 
@@ -77,6 +77,7 @@ F11 alterna la pantalla completa.
 --fullscreen         pantalla completa
 --textures DIR       texturas de sustitución <hash>.png (por defecto textures/)
 --dump-textures DIR  vuelca las texturas originales para reescalarlas
+--ui-font FICHERO    fuente TTF de los diálogos (por defecto Noto Sans, DejaVu Sans o Segoe UI)
 ```
 
 ## Texturas reescaladas con IA
@@ -115,6 +116,7 @@ python3 tools/check_repo.py --history   # revisa todo el historial antes de publ
 - [pspdecrypt](https://github.com/John-K/pspdecrypt) (GPL-3.0): descifrado del ejecutable.
 - [Ghidra](https://github.com/NationalSecurityAgency/ghidra) y [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex): análisis.
 - [SDL2](https://www.libsdl.org/), [FFmpeg](https://ffmpeg.org/), [stb](https://github.com/nothings/stb),
+  [Dear ImGui](https://github.com/ocornut/imgui) (MIT),
   [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN).
 - Inspirado en [N64Recomp](https://github.com/N64Recomp/N64Recomp) y RT64.
 

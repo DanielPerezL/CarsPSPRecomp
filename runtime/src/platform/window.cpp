@@ -7,6 +7,7 @@
 
 #include "../core.h"
 #include "../gpu/gl_funcs.h"
+#include "../ui/overlay.h"
 
 #define CARS_GL_DEFINE(type, name) type name = nullptr;
 CARS_GL_FUNCS(CARS_GL_DEFINE)
@@ -58,6 +59,7 @@ bool window_init(const WindowConfig &cfg) {
     SDL_GL_SetSwapInterval(cfg.vsync ? 1 : 0);
     if (!gl_load_functions()) return false;
     LOGI("window", "OpenGL %s (%s)", glGetString(GL_VERSION), glGetString(GL_RENDERER));
+    overlay_init(g_window, g_gl, cfg.ui_font.c_str());  // sin interfaz propia el juego sigue funcionando
     for (int i = 0; i < SDL_NumJoysticks(); i++)
         if (SDL_IsGameController(i) && (g_pad = SDL_GameControllerOpen(i))) {
             LOGI("window", "mando: %s", SDL_GameControllerName(g_pad));
@@ -67,6 +69,7 @@ bool window_init(const WindowConfig &cfg) {
 }
 
 void window_shutdown() {
+    overlay_shutdown();
     if (g_gl) SDL_GL_DeleteContext(g_gl);
     if (g_window) SDL_DestroyWindow(g_window);
     SDL_Quit();
@@ -76,6 +79,7 @@ bool window_poll() {
     SDL_Event e;
     while (SDL_PollEvent(&e)) {
         if (e.type == SDL_QUIT) return false;
+        overlay_event(&e);
         if (e.type == SDL_CONTROLLERDEVICEADDED && !g_pad) g_pad = SDL_GameControllerOpen(e.cdevice.which);
         if (e.type == SDL_KEYDOWN && e.key.keysym.sym == SDLK_F11) {
             bool fs = SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN_DESKTOP;
