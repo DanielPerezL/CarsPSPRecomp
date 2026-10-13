@@ -17,7 +17,29 @@
 #include "../../third_party/stb/stb_image_write.h"
 #pragma GCC diagnostic pop
 
+extern "C" {
+#include <libavutil/md5.h>
+#include <libavutil/mem.h>
+}
+
 namespace fs = std::filesystem;
+
+uint64_t texrep_content_hash(const uint8_t *rgba, int w, int h) {
+    uint8_t head[8], digest[16];
+    for (int i = 0; i < 4; i++) {
+        head[i] = (uint8_t)((uint32_t)w >> (8 * i));
+        head[4 + i] = (uint8_t)((uint32_t)h >> (8 * i));
+    }
+    AVMD5 *md5 = av_md5_alloc();
+    av_md5_init(md5);
+    av_md5_update(md5, head, 8);
+    av_md5_update(md5, rgba, (size_t)w * h * 4);
+    av_md5_final(md5, digest);
+    av_free(md5);
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++) v = v << 8 | digest[i];  // "%016llx" imprime los bytes en orden
+    return v;
+}
 
 static std::string g_replace_dir, g_dump_dir;
 static std::unordered_set<uint64_t> g_available, g_dumped;

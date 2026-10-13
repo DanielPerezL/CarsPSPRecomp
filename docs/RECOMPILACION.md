@@ -73,6 +73,10 @@ Decisiones del runtime:
   aquí) y filtrado anisotrópico. Con la cadena completa, un quad muy estrecho (la barra de nitro) promediaba
   el alfa de zonas transparentes y aparecía como una franja semitransparente. F5 vuelve a leer la carpeta
   de sustituciones y fuerza la subida de cada textura en su próximo uso.
+- **Nombre de las texturas:** 8 primeros bytes del MD5 de (ancho, alto, RGBA decodificado). No depende de la
+  dirección, el formato ni los bytes sobrantes de la paleta, así que `tools/textures/export.py` obtiene los
+  mismos nombres leyendo la ISO (comprobado: 134 de 136 texturas de un recorrido menú + carrera; las otras
+  dos las genera el juego).
 - **Diálogos del sistema** (`sceUtilityMsgDialog`): en la PSP los dibuja el firmware encima de la escena
   del juego, que sigue renderizando y llama a `Update` en cada fotograma. Aquí se dibujan con Dear ImGui
   sobre la ventana, a su resolución real y escalados al rectángulo de 480x272 (`ui/overlay.cpp`); el HLE

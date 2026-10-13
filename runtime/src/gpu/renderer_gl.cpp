@@ -349,12 +349,13 @@ void resolve_texture(Snap &s) {
     CachedTex &ct = g_textures[key];
     uint64_t h = texture_hash(p, g_ge.clut);
     if (!ct.tex || ct.hash != h) {
+        // El nombre de la textura (volcado y sustitución) es el hash de la imagen decodificada, que también
+        // calcula tools/textures/export.py leyendo los ficheros del juego.
         int w = p.w, hh = p.h;
-        bool replaced = texrep_load(h, g_rgba, w, hh);
-        if (!replaced) {
-            texture_decode(p, g_ge.clut, g_rgba);
-            texrep_dump(h, g_rgba.data(), p.w, p.h);
-        }
+        texture_decode(p, g_ge.clut, g_rgba);
+        uint64_t name = texrep_content_hash(g_rgba.data(), p.w, p.h);
+        bool replaced = texrep_load(name, g_rgba, w, hh);
+        if (!replaced) texrep_dump(name, g_rgba.data(), p.w, p.h);
         if (!ct.tex) glGenTextures(1, &ct.tex);
         glBindTexture(GL_TEXTURE_2D, ct.tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);

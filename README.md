@@ -82,19 +82,24 @@ F11 alterna la pantalla completa y F5 recarga las texturas propias. En los diál
 
 ## Texturas propias
 
-Puedes exportar las texturas del juego, editarlas y ver los cambios en el juego sin reiniciarlo.
+Puedes exportar todas las texturas del juego de golpe, editarlas y ver los cambios en el juego sin
+reiniciarlo.
 
 ```bash
-build/cars --iso juego.iso --dump-textures texdump   # 1. juega: se guardan las texturas que aparezcan
-mkdir -p textures && cp texdump/<hash>.png textures/  # 2. copia las que quieras cambiar y edítalas
-build/cars --iso juego.iso                           # 3. textures/ se carga automáticamente
+python3 tools/textures/export.py --iso juego.iso --out texdump   # 1. ~1.860 texturas en unos segundos
+mkdir -p textures && cp texdump/<hash>.png textures/            # 2. copia las que quieras cambiar y edítalas
+build/cars --iso juego.iso                                      # 3. textures/ se carga automáticamente
 ```
 
-- Cada textura se llama por el hash de su contenido (`<hash>.png`), estable entre partidas.
+- `export.py` lee la ISO directamente: las texturas de RenderWare de los `.DFF` y los PNG de `USRDIR`.
+  `texdump/index.csv` dice de qué fichero sale cada una y su nombre original (p. ej. las de un coche están
+  en `CARSKIN_<COCHE>_<VARIANTE>.DFF`).
+- Cada textura se llama por el hash de su imagen (`<hash>.png`), el mismo con el que el juego la busca.
 - La versión editada puede tener el mismo tamaño o más resolución, siempre que mantenga la proporción
   (128x64 → 512x256). El canal alfa se respeta.
 - **F5** recarga la carpeta `textures/` en caliente: edita, guarda y pulsa F5 para verlo en el juego.
-- Una misma imagen con otra paleta tiene otro hash (p. ej. los coches con varios colores).
+- Unas pocas texturas las genera el juego mientras corre (no están en los ficheros). Para esas,
+  `build/cars --iso juego.iso --dump-textures texdump` guarda, jugando, las que aparezcan en pantalla.
 
 ## Contribuir
 
