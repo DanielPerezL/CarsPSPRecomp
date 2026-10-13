@@ -81,8 +81,14 @@ Decisiones del runtime:
   del juego, que sigue renderizando y llama a `Update` en cada fotograma. Aquí se dibujan con Dear ImGui
   sobre la ventana, a su resolución real y escalados al rectángulo de 480x272 (`ui/overlay.cpp`); el HLE
   (`hle_dialog.cpp`) sigue la máquina de estados y las opciones de PPSSPP. Mientras están abiertos, el
-  juego no recibe los botones, ni tampoco la pulsación que los cierra. Las partidas solo usan los modos
-  automáticos de Savedata, que en la PSP no muestran interfaz.
+  juego no recibe los botones, ni tampoco la pulsación que los cierra.
+- **Partidas** (`sceUtilitySavedata`): el autoguardado y la carga al arrancar usan los modos automáticos
+  (AUTOSAVE/AUTOLOAD/SIZES), que en la PSP no muestran nada y terminan al momento. *Opciones → Guardar/Cargar*
+  usa SAVE y LOAD, que sí abren la pantalla del sistema: confirmación (sobrescribir con «No» por defecto),
+  «Guardando…»/«Cargando…» (se mantiene ~1 s, como en la consola), resultado o «No hay datos». Se dibuja con
+  el mismo overlay que los mensajes, con la disposición de PPSSPP (`PSPSaveDialog.cpp`): banner, ICON0 y
+  título/fecha/tamaño de la partida a la izquierda, mensaje a la derecha. Sin ventana (`--headless`) o con
+  `CARS_DIALOG_ANSWER` se guarda o carga directamente, sin pantalla.
 
 ## Estado
 

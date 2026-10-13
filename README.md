@@ -22,7 +22,7 @@ CPU.
 | Música (ATRAC3+), efectos (SAS) y vídeos (PSMF) | ✅ |
 | Exportación y sustitución de texturas (recarga en caliente con F5) | ✅ |
 | Multijugador ad hoc | ❌ (la red se inicializa, nunca hay rivales) |
-| Diálogos del sistema (mando, teclado o ratón) | ✅ |
+| Diálogos del sistema y pantalla de Guardar/Cargar (mando, teclado o ratón) | ✅ |
 | Windows (MSYS2/MinGW-w64) | 🚧 preparado, pendiente de probar |
 
 ## Requisitos (Linux)

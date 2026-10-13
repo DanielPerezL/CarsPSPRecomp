@@ -10,6 +10,8 @@
 #include <vector>
 
 #include "../core.h"
+#include "../gpu/gl_funcs.h"
+#include "../../third_party/stb/stb_image.h"
 #include "dialog.h"
 #include "imgui/backends/imgui_impl_opengl3.h"
 #include "imgui/backends/imgui_impl_sdl2.h"
@@ -25,6 +27,8 @@ float g_alpha = 0;    // aparición/desaparición del diálogo
 uint64_t g_last_us = 0;
 std::string g_toast;
 double g_toast_until = 0;  // segundos (SDL_GetTicks)
+GLuint g_icon_tex = 0;     // icono de la partida en la pantalla de Guardar/Cargar
+int g_icon_serial = -1, g_icon_w = 0, g_icon_h = 0;
 
 // Fuentes libres habituales de cada sistema (con acentos y ñ). Sin ninguna, la de ImGui.
 std::string find_font() {
@@ -141,39 +145,89 @@ bool hint(ImDrawList *dl, const Screen &sc, float &right, bool cross, const std:
     return hover && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
 }
 
-void draw_dialog(ImDrawList *dl) {
+// Sube a una textura el ICON0.PNG de la partida cuando cambia.
+void update_icon() {
     SystemDialog &d = g_dialog;
-    Screen sc = screen_rect();
+    if (d.icon_serial == g_icon_serial) return;
+    g_icon_serial = d.icon_serial;
+    g_icon_w = g_icon_h = 0;
+    if (d.icon_png.empty()) return;
+    int w, h, n;
+    uint8_t *px = stbi_load_from_memory(d.icon_png.data(), (int)d.icon_png.size(), &w, &h, &n, 4);
+    if (!px) return;
+    if (!g_icon_tex) glGenTextures(1, &g_icon_tex);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, g_icon_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, px);
+    stbi_image_free(px);
+    g_icon_w = w;
+    g_icon_h = h;
+}
+
+// Cabecera de la pantalla de partidas: franja superior con un hexágono y el título ("Guardar"/"Cargar").
+void draw_banner(ImDrawList *dl, const Screen &sc, const std::string &title) {
+    dl->AddRectFilled(sc.p(0, 0), sc.p(480, 23), rgba(88, 99, 99, 0.45f));
+    dl->AddNgon(sc.p(16, 11.5f), 5.5f * sc.s, rgba(255, 255, 255, 0.9f), 6, std::max(1.f, sc.s * 0.8f));
+    float fs = 12 * sc.s;
+    dl->AddText(ImGui::GetFont(), fs, {sc.p(30, 0).x, sc.p(0, 11.5f).y - fs / 2}, rgba(255, 255, 255, 1), title.c_str());
+}
+
+// Icono (144x80 en la PSP, sobre negro) y datos de la partida debajo, en la mitad izquierda.
+void draw_save_info(ImDrawList *dl, const Screen &sc, const SystemDialog &d) {
+    if (g_icon_w > 0) {
+        float h = 80, w = std::min(144.f, h * g_icon_w / g_icon_h), x = 27 + (144 - w) / 2, y = 97;
+        dl->AddRectFilled(sc.p(x, y), sc.p(x + w, y + h), rgba(0, 0, 0, 1));
+        int k = d.icon_dim ? 0x77 : 0xFF;
+        dl->AddImage((ImTextureID)(intptr_t)g_icon_tex, sc.p(x, y), sc.p(x + w, y + h), {0, 0}, {1, 1},
+                     rgba(k, k, k, 1));
+    }
+    float fs = 10 * sc.s, y = sc.p(0, 196).y;
+    for (const std::string &line : wrap(d.info, fs, 180 * sc.s)) {
+        dl->AddText(ImGui::GetFont(), fs, {sc.p(8, 0).x, y}, rgba(255, 255, 255, 1), line.c_str());
+        y += fs * 1.3f;
+    }
+}
+
+// Mensaje centrado en cx (unidades de la PSP), enmarcado por dos líneas entre x0 y x1, con Sí/No debajo.
+void draw_message(ImDrawList *dl, const Screen &sc, SystemDialog &d, float cx, float width, float x0, float x1,
+                  float cy) {
     ImFont *font = ImGui::GetFont();
     float fs = 14 * sc.s;
-
-    // Fondo: oscurece la escena del juego como el sistema de la PSP.
-    dl->AddRectFilled(sc.p(0, 0), sc.p(480, 272), rgba(0, 0, 0, 0.55f));
-
-    std::vector<std::string> lines = wrap(d.text, fs, 380 * sc.s);
+    std::vector<std::string> lines = wrap(d.text, fs, width * sc.s);
     float line_h = fs * 1.35f, text_h = lines.size() * line_h;
-    float buttons_h = d.yesno ? 34 * sc.s : 0;
-    float block_h = text_h + buttons_h;
-    float top = sc.p(0, 126).y - block_h / 2;
+    float buttons_h = d.yesno ? 34 * sc.s : 0, spinner_h = d.busy ? 26 * sc.s : 0;
+    float block_h = text_h + buttons_h + spinner_h;
+    float top = sc.p(0, cy).y - block_h / 2;
 
     // Líneas horizontales que enmarcan el mensaje
-    float margin = 14 * sc.s;
+    float margin = 14 * sc.s, thick = std::max(1.f, sc.s * 0.6f);
     ImU32 line_col = rgba(255, 255, 255, 0.7f);
-    dl->AddLine({sc.p(40, 0).x, top - margin}, {sc.p(440, 0).x, top - margin}, line_col, std::max(1.f, sc.s * 0.6f));
-    dl->AddLine({sc.p(40, 0).x, top + block_h + margin}, {sc.p(440, 0).x, top + block_h + margin}, line_col,
-                std::max(1.f, sc.s * 0.6f));
+    dl->AddLine({sc.p(x0, 0).x, top - margin}, {sc.p(x1, 0).x, top - margin}, line_col, thick);
+    dl->AddLine({sc.p(x0, 0).x, top + block_h + margin}, {sc.p(x1, 0).x, top + block_h + margin}, line_col, thick);
 
     for (size_t i = 0; i < lines.size(); i++) {
         float w = font->CalcTextSizeA(fs, FLT_MAX, 0, lines[i].c_str()).x;
-        dl->AddText(font, fs, {sc.p(240, 0).x - w / 2, top + i * line_h}, rgba(255, 255, 255, 1), lines[i].c_str());
+        dl->AddText(font, fs, {sc.p(cx, 0).x - w / 2, top + i * line_h}, rgba(255, 255, 255, 1), lines[i].c_str());
+    }
+
+    if (d.busy) {  // guardando o cargando: rueda girando
+        ImVec2 c{sc.p(cx, 0).x, top + text_h + spinner_h * 0.55f};
+        float a0 = SDL_GetTicks() / 120.f, r = 7 * sc.s;
+        dl->PathArcTo(c, r, a0, a0 + 4.2f, 24);
+        dl->PathStroke(rgba(255, 255, 255, 0.85f), 0, std::max(1.5f, 1.6f * sc.s));
     }
 
     if (d.yesno) {
         const char *labels[2] = {"Sí", "No"};
-        float cy = top + text_h + buttons_h * 0.6f;
+        float by = top + text_h + buttons_h * 0.6f;
         for (int i = 0; i < 2; i++) {
             int value = i == 0 ? 1 : 0;
-            ImVec2 c{sc.p(240 + (i == 0 ? -40 : 40), 0).x, cy};
+            ImVec2 c{sc.p(cx + (i == 0 ? -40 : 40), 0).x, by};
             ImVec2 a{c.x - 30 * sc.s, c.y - 10 * sc.s}, b{c.x + 30 * sc.s, c.y + 10 * sc.s};
             if (ImGui::IsMouseHoveringRect(a, b)) {
                 if (ImGui::GetIO().MouseDelta.x != 0 || ImGui::GetIO().MouseDelta.y != 0) d.choice = value;
@@ -183,11 +237,28 @@ void draw_dialog(ImDrawList *dl) {
             if (sel) {
                 float pulse = 0.75f + 0.25f * std::sin(SDL_GetTicks() / 180.f);
                 dl->AddRectFilled(a, b, rgba(255, 255, 255, 0.22f * pulse), 5 * sc.s);
-                dl->AddRect(a, b, rgba(255, 255, 255, 0.85f * pulse), 5 * sc.s, 0, std::max(1.f, sc.s * 0.6f));
+                dl->AddRect(a, b, rgba(255, 255, 255, 0.85f * pulse), 5 * sc.s, 0, thick);
             }
             float w = font->CalcTextSizeA(fs, FLT_MAX, 0, labels[i]).x;
             dl->AddText(font, fs, {c.x - w / 2, c.y - fs / 2}, rgba(255, 255, 255, sel ? 1 : 0.6f), labels[i]);
         }
+    }
+}
+
+void draw_dialog(ImDrawList *dl) {
+    SystemDialog &d = g_dialog;
+    Screen sc = screen_rect();
+
+    // Fondo: oscurece la escena del juego como el sistema de la PSP.
+    dl->AddRectFilled(sc.p(0, 0), sc.p(480, 272), rgba(0, 0, 0, 0.55f));
+
+    if (d.banner.empty()) {
+        draw_message(dl, sc, d, 240, 380, 40, 440, 126);
+    } else {  // pantalla de partidas: disposición de la PSP (PPSSPP, PSPSaveDialog.cpp)
+        update_icon();
+        draw_banner(dl, sc, d.banner);
+        draw_save_info(dl, sc, d);
+        draw_message(dl, sc, d, 334, 254, 202, 466, 136);
     }
 
     // Barra inferior: ✕ Aceptar / ○ Atrás (pulsables con el ratón)
@@ -246,6 +317,8 @@ bool overlay_init(void *sdl_window, void *gl_context, const char *font) {
 
 void overlay_shutdown() {
     if (!g_ready) return;
+    if (g_icon_tex) glDeleteTextures(1, &g_icon_tex);
+    g_icon_tex = 0;
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
     ImGui::DestroyContext();

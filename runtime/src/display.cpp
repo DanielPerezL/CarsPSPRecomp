@@ -104,7 +104,10 @@ static bool input_blocked() {
     if (g_wait_release && !g_blocked) {
         PadState p = g_windowed ? window_pad() : PadState{};
         bool centered = p.lx > 64 && p.lx < 192 && p.ly > 64 && p.ly < 192;
-        if (display_buttons_raw() == 0 && centered) g_wait_release = false;
+        if (display_buttons_raw() == 0 && centered) {
+            g_wait_release = false;
+            LOGD("display", "entrada devuelta al juego");
+        }
     }
     return g_blocked || g_wait_release;
 }

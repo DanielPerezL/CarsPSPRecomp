@@ -57,14 +57,13 @@ void finish(int pressed) {
     LOGI("utility", "diálogo cerrado: botón %d", pressed);
 }
 
-// Respuesta automática si no hay ventana o se pide en el entorno (CARS_DIALOG_ANSWER=yes|no).
-int auto_answer() {
+}  // namespace
+
+int dialog_auto_answer() {
     const char *ans = getenv("CARS_DIALOG_ANSWER");
     if (ans) return !strcmp(ans, "no") ? 2 : 1;
     return display_windowed() ? -1 : 1;
 }
-
-}  // namespace
 
 HLE(sceUtilityMsgDialogInitStart) {
     if (g_status != NONE) RET(ERR_INVALID_STATUS);
@@ -104,7 +103,7 @@ HLE(sceUtilityMsgDialogInitStart) {
     LOGI("utility", "diálogo (tipo %u, opciones %03x, v%d): %s", type, options, v3 ? 3 : g_size >= SIZE_V2 ? 2 : 1,
          d.text.c_str());
 
-    int ans = auto_answer();
+    int ans = dialog_auto_answer();
     if (ans >= 0) {
         finish(d.yesno || d.ok ? ans : (v3 || d.yesno ? 3 : 0));
         RET(0);
