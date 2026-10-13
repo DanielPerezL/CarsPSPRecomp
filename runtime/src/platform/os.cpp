@@ -150,15 +150,6 @@ std::string os_exe_dir() {
     return dir;
 }
 
-void os_redirect_log(const std::string &log_path) {
-#ifdef _WIN32
-    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
-    if (h == nullptr || h == INVALID_HANDLE_VALUE) freopen(log_path.c_str(), "w", stderr);
-#else
-    (void)log_path;
-#endif
-}
-
 void os_error_box(const char *text) {
 #ifdef _WIN32
     SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Cars", text, nullptr);

@@ -107,8 +107,8 @@ Runtime decisions:
   variant: Debian's *win32* variant lacks `std::condition_variable`). Fibers are Win32 fibers. The
   `jmp_buf` lives inside a struct to keep its 16-byte alignment (x64 `setjmp` saves the XMM registers with
   aligned instructions). A manifest sets UTF-8 as the code page (paths with accented characters) and
-  declares per-monitor DPI awareness. It is a windowed application: no console, stderr goes to `cars.log`
-  and fatal errors to a message box.
+  declares per-monitor DPI awareness. It is a windowed application with no console: fatal errors are shown in a
+  message box.
 - **Save games** (`sceUtilitySavedata`): autosave and loading at boot use the automatic modes
   (AUTOSAVE/AUTOLOAD/SIZES), which on the PSP show nothing and finish immediately. *Options → Save/Load*
   uses SAVE and LOAD, which do open the system screen: confirmation (overwrite, with "No" as the

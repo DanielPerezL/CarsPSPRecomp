@@ -45,7 +45,7 @@ tools/build_windows.sh                                         # → build/windo
 `build_windows.sh` downloads SDL2 and FFmpeg for Windows (pinned versions, verified by SHA-256),
 compiles with MinGW-w64 and packages the executable, its DLLs and the game image. On Windows, just
 unzip it, copy the ISO into the folder and run `cars.exe` (it looks for the `.iso` in its own folder;
-errors are shown in a message box and the log goes to `cars.log`). The package contains the game's
+errors are shown in a message box). The package contains the game's
 recompiled code: it is for personal use only, do not share it.
 
 ## Requirements (building on Windows 10/11)

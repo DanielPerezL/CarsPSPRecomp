@@ -53,7 +53,6 @@ static std::string find_iso(const std::string &dir) {
 
 int main(int argc, char **argv) {
     const std::string exe_dir = os_exe_dir();
-    os_redirect_log(exe_dir + "cars.log");
     std::string image;
     std::string iso;
     WindowConfig wcfg;

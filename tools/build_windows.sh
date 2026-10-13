@@ -62,7 +62,7 @@ cmake -S "$ROOT" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_SYSTEM_
       -DCMAKE_C_COMPILER=$CC -DCMAKE_CXX_COMPILER=$CXX -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres
 cmake --build "$BUILD"
 
-# Paquete: ejecutable, DLL, imagen del juego, lanzador y licencias de las bibliotecas
+# Paquete: ejecutable, DLL, imagen del juego y licencias de las bibliotecas
 WINPTHREAD="$($CC -print-file-name=libwinpthread-1.dll)"
 [ -f "$WINPTHREAD" ] || WINPTHREAD=/usr/x86_64-w64-mingw32/lib/libwinpthread-1.dll
 rm -rf "$OUT"
@@ -76,18 +76,11 @@ cp "$ROOT/LICENSE" "$OUT/licencias/cars-port-GPL-3.0.txt"
 cp "$DEPS/SDL2-$SDL_VER/LICENSE.txt" "$OUT/licencias/SDL2.txt"
 cp "$FF_DIR/LICENSE.txt" "$OUT/licencias/FFmpeg-LGPL.txt"
 
-sed 's/$/\r/' > "$OUT/Cars.bat" <<'EOF'
-@echo off
-rem Lanza el juego con opciones. Con doble clic en cars.exe se usa la .iso de esta carpeta.
-rem Opciones: --scale N (resolucion 480x272 x N), --fullscreen, --no-interpolation, --fps N
-cd /d "%~dp0"
-start "" cars.exe --fullscreen %*
-EOF
 sed 's/$/\r/' > "$OUT/LEEME.txt" <<'EOF'
 Cars (PSP) - port para PC (Windows 10/11, 64 bits)
 
 1. Copia tu ISO del juego (Disney-Pixar Cars, ULES00324, versión española) en esta carpeta.
-2. Doble clic en cars.exe (ventana) o en Cars.bat (pantalla completa).
+2. Doble clic en cars.exe. F11 alterna la pantalla completa.
 
 Requisitos: GPU con OpenGL 3.3 o superior (cualquier equipo actual).
 
@@ -99,14 +92,15 @@ Controles
   Start / Select   Intro / Retroceso  Start / Back
   F11 pantalla completa, F5 recarga las texturas de textures\
 
-Opciones (desde Cars.bat o una consola):
+Opciones: crea un acceso directo a cars.exe y añádelas al final de Propiedades > Destino
+(p. ej. "...\cars.exe" --scale 6 --fullscreen), o lanza cars.exe desde una consola:
   --iso FICHERO        otra ISO
   --scale N            resolución interna 480x272 x N (por defecto 4)
   --fps N              fotogramas por segundo (por defecto, los del monitor)
   --no-interpolation   30 fps como en la PSP
   --fullscreen         pantalla completa
 
-Las partidas se guardan en saves\ y el registro en cars.log, en esta carpeta.
+Las partidas se guardan en saves\, en esta carpeta.
 
 Este paquete incluye el código del juego recompilado: es solo para tu uso, con tu copia del juego.
 No lo compartas. Cars es (c) Disney/Pixar.
