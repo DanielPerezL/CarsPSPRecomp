@@ -1,0 +1,12 @@
+# Material con copyright (Disney/THQ): nunca subir ni redistribuir
+*.iso
+*.ISO
+extracted/
+decrypted/
+dumps/
+ghidra/
+
+# Herramientas de terceros clonadas/compiladas localmente
+third_party/
+
+__pycache__/
