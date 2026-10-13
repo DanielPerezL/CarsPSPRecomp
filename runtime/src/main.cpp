@@ -8,6 +8,8 @@
 #include "platform/window.h"
 #include "threads.h"
 
+void audio_init(bool enabled, const std::string &record_path);
+
 static void usage() {
     fprintf(stderr,
             "uso: cars --iso JUEGO.iso [opciones]\n"
@@ -20,6 +22,7 @@ static void usage() {
             "  --hidden            ventana oculta (pruebas automáticas con capturas)\n"
             "  --screenshot T:F    captura en el segundo T al fichero F (.ppm); repetible\n"
             "  --exit-after T      salir tras T segundos\n"
+            "  --record-audio F    guarda la mezcla de audio en un WAV\n"
             "  --image FICHERO     imagen relocalizada (por defecto build/gen/image.bin)\n"
             "  --saves DIR         carpeta de partidas (por defecto saves)\n"
             "  -v | -vv            más registro (estado de hilos / traza de llamadas al sistema)\n");
@@ -32,6 +35,7 @@ int main(int argc, char **argv) {
     WindowConfig wcfg;
     RendererConfig rcfg;
     bool headless = false;
+    std::string record_audio;
     for (int i = 1; i < argc; i++) {
         std::string a = argv[i];
         if (a == "--iso" && i + 1 < argc) iso = argv[++i];
@@ -43,6 +47,7 @@ int main(int argc, char **argv) {
         else if (a == "--fullscreen") wcfg.fullscreen = true;
         else if (a == "--vsync") wcfg.vsync = true;
         else if (a == "--headless") headless = true;
+        else if (a == "--record-audio" && i + 1 < argc) record_audio = argv[++i];
         else if (a == "--hidden") wcfg.hidden = true;
         else if (a == "--exit-after" && i + 1 < argc) display_set_exit_after(atof(argv[++i]));
         else if (a == "--screenshot" && i + 1 < argc) {
@@ -74,6 +79,7 @@ int main(int argc, char **argv) {
         if (!window_init(wcfg) || !renderer_init(rcfg)) fatal("no se pudo inicializar la ventana/OpenGL");
     }
     display_init(!headless);
+    audio_init(!headless, record_audio);
     sched_init();
 
     // El cargador de la PSP arranca module_start en un hilo "user_main" con la ruta del ejecutable.

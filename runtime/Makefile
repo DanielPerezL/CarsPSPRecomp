@@ -11,18 +11,20 @@ CXX     ?= g++
 GENFLAGS := -O1 -fno-strict-aliasing -fwrapv -w -I include -I $(GEN)
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
 SDL_LIBS   := $(shell pkg-config --libs sdl2)
-CFLAGS   := -O2 -g -Wall -Wextra -fno-strict-aliasing -I include -I src $(SDL_CFLAGS)
+AV_CFLAGS  := $(shell pkg-config --cflags libavcodec libavutil)
+AV_LIBS    := $(shell pkg-config --libs libavcodec libavutil)
+CFLAGS   := -O2 -g -Wall -Wextra -fno-strict-aliasing -I include -I src $(SDL_CFLAGS) $(AV_CFLAGS)
 CXXFLAGS := -std=c++17 $(CFLAGS)
 
 GEN_SRC := $(wildcard $(GEN)/*.c)
-RT_SRC  := $(wildcard src/*.cpp src/gpu/*.cpp src/platform/*.cpp)
+RT_SRC  := $(wildcard src/*.cpp src/gpu/*.cpp src/platform/*.cpp src/audio/*.cpp)
 GEN_OBJ := $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))
 RT_OBJ  := $(patsubst src/%.cpp,$(OBJ)/rt/%.o,$(RT_SRC))
 
 all: $(BIN)
 
 $(BIN): $(GEN_OBJ) $(RT_OBJ)
-	$(CXX) -o $@ $^ $(SDL_LIBS) -lm
+	$(CXX) -o $@ $^ $(SDL_LIBS) $(AV_LIBS) -lm
 
 $(OBJ)/gen/%.o: $(GEN)/%.c include/recomp.h
 	@mkdir -p $(dir $@)
