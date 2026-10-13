@@ -1,4 +1,7 @@
-// Renderizador OpenGL 3.3 core de la GE: emula la tubería fija de la PSP a resolución interna escalada.
+// Renderizador OpenGL 3.3 core de la GE: emula la tubería fija de la PSP a resolución interna escalada
+// y, opcionalmente, genera fotogramas intermedios interpolando entre fotogramas lógicos del juego.
+#include <SDL2/SDL.h>
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -155,11 +158,48 @@ void main() {
 }
 )";
 
+// Instantánea del estado de la GE necesaria para ejecutar un dibujo (mismos accesores que GeState).
+struct Snap {
+    uint32_t cmd[256];
+    float world[12], view[12], proj[16];
+    GLuint tex = 0;
+    float tex_w = 1, tex_h = 1;
+    bool tex_flip = false;
+
+    uint32_t arg(int c) const { return cmd[c] & 0xFFFFFF; }
+    bool through() const { return cmd[0x12] >> 23 & 1; }
+    float f24(int c) const {
+        uint32_t v = cmd[c] << 8;
+        float f;
+        memcpy(&f, &v, 4);
+        return f;
+    }
+    void color(int c, float out[3]) const {
+        uint32_t v = arg(c);
+        out[0] = (v & 0xFF) / 255.f;
+        out[1] = (v >> 8 & 0xFF) / 255.f;
+        out[2] = (v >> 16 & 0xFF) / 255.f;
+    }
+    uint32_t fb_addr() const { return arg(0x9C) & 0x1FFFF0; }
+};
+
+struct DrawCmd {
+    Snap snap;
+    GpuPrim prim;
+    std::vector<GpuVertex> verts;
+    uint64_t key;
+};
+
+struct Frame {
+    std::vector<DrawCmd> cmds;
+    uint64_t t_us = 0;
+    uint32_t display = 0, stride = 512, fmt = 3;
+};
+
 struct Target {
     uint32_t addr = 0;
     int w = 480, h = 272;
     GLuint fbo = 0, color = 0, depth = 0;
-    uint64_t last_frame = 0;
 };
 
 struct CachedTex {
@@ -173,10 +213,27 @@ GLuint g_prog = 0, g_vao = 0, g_vbo = 0;
 std::unordered_map<std::string, GLint> g_loc;
 std::unordered_map<uint32_t, Target> g_targets;
 std::unordered_map<uint64_t, CachedTex> g_textures;
-uint64_t g_frame = 1;
 Target *g_presented = nullptr;
 GLuint g_cpu_tex = 0, g_cpu_fbo = 0;
 std::vector<uint8_t> g_rgba;
+
+// interpolación
+Frame g_recording, g_prev, g_last;
+bool g_have_prev = false, g_have_last = false;
+uint64_t g_present_interval = 0, g_last_present = 0;
+uint64_t g_stat_presents = 0, g_stat_flips = 0, g_stat_t0 = 0;
+
+void count_stats(bool flip) {
+    (flip ? g_stat_flips : g_stat_presents)++;
+    uint64_t now = time_us();
+    if (now - g_stat_t0 >= 2000000) {
+        double s = (now - g_stat_t0) / 1e6;
+        LOGI("gpu", "%.0f fps presentados, %.0f fotogramas lógicos/s", g_stat_presents / s, g_stat_flips / s);
+        g_stat_presents = g_stat_flips = 0;
+        g_stat_t0 = now;
+    }
+}
+std::vector<GpuVertex> g_lerp_verts;
 
 GLint U(const char *name) {
     auto it = g_loc.find(name);
@@ -209,15 +266,13 @@ void mat43_to_44(const float *m, float *o) {
     }
 }
 
-Target &target_for(uint32_t addr) {
+Target &target_for(uint32_t addr, uint32_t stride, uint32_t scissor_br) {
     Target &t = g_targets[addr];
     if (t.fbo) return t;
     t.addr = addr;
-    uint32_t stride = g_ge.cmd[0x9D] & 0x7FF;
-    int sx2 = (g_ge.arg(0xD5) & 0x3FF) + 1, sy2 = (g_ge.arg(0xD5) >> 10 & 0x3FF) + 1;
+    int sy2 = (scissor_br >> 10 & 0x3FF) + 1;
     t.w = stride >= 480 ? 480 : std::max<int>(stride, 16);
     t.h = t.w == 480 ? 272 : std::min(std::max(sy2, 16), 512);
-    (void)sx2;
     int S = g_cfg.scale;
     glGenTextures(1, &t.color);
     glBindTexture(GL_TEXTURE_2D, t.color);
@@ -257,7 +312,8 @@ GLenum fix_factor(uint32_t color) {
     return GL_CONSTANT_COLOR;
 }
 
-void bind_texture() {
+// Resuelve (y sube si ha cambiado) la textura del estado actual de la GE.
+void resolve_texture(Snap &s) {
     TexParams p;
     p.addr = g_ge.tex_addr(0);
     p.bufw = g_ge.tex_bufw(0);
@@ -267,21 +323,17 @@ void bind_texture() {
     p.swizzled = g_ge.arg(0xC2) & 1;
     p.clutfmt = g_ge.arg(0xC5);
     if (p.format > 10) p.format = 3;
-    bool clamp_s = g_ge.arg(0xC7) & 1, clamp_t = g_ge.arg(0xC7) >> 8 & 1;
-    bool linear = g_ge.arg(0xC6) >> 8 & 1;
-
     // ¿render-to-texture? (la textura es un framebuffer que hemos dibujado)
-    uint32_t vram_off = p.addr & 0x1FFFF0;
     if ((p.addr & 0x0F000000) == 0x04000000) {
-        auto it = g_targets.find(vram_off);
+        auto it = g_targets.find(p.addr & 0x1FFFF0);
         if (it != g_targets.end()) {
-            glBindTexture(GL_TEXTURE_2D, it->second.color);
-            glUniform1i(U("u_texFlipY"), 1);
-            glUniform2f(U("u_texSize"), (float)it->second.w, (float)it->second.h);
+            s.tex = it->second.color;
+            s.tex_flip = true;
+            s.tex_w = (float)it->second.w;
+            s.tex_h = (float)it->second.h;
             return;
         }
     }
-    glUniform1i(U("u_texFlipY"), 0);
     uint64_t key = (uint64_t)p.addr << 32 ^ (uint64_t)p.format << 28 ^ (uint64_t)p.w << 16 ^ (uint64_t)p.h << 4 ^
                    (p.clutfmt * 0x9E3779B97F4A7C15ULL);
     CachedTex &ct = g_textures[key];
@@ -295,18 +347,14 @@ void bind_texture() {
         ct.hash = h;
         ct.w = p.w;
         ct.h = p.h;
-    } else {
-        glBindTexture(GL_TEXTURE_2D, ct.tex);
     }
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, clamp_s ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, clamp_t ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-    glUniform2f(U("u_texSize"), (float)p.w, (float)p.h);
+    s.tex = ct.tex;
+    s.tex_flip = false;
+    s.tex_w = (float)p.w;
+    s.tex_h = (float)p.h;
 }
 
-void set_light_uniforms() {
-    const GeState &g = g_ge;
+void set_light_uniforms(const Snap &g) {
     float v[3];
     glUniform1i(U("u_lighting"), g.arg(0x17) & 1);
     glUniform1i(U("u_matUpdate"), g.arg(0x53) & 7);
@@ -352,6 +400,240 @@ void set_light_uniforms() {
     glUniform3fv(U("u_lightSpec"), 4, spec);
 }
 
+// Ejecuta un dibujo; las matrices pueden venir interpoladas (si no, las de la instantánea).
+void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const float *world, const float *view,
+             const float *proj) {
+    Target &t = target_for(g.fb_addr(), g.cmd[0x9D] & 0x7FF, g.arg(0xD5));
+    int S = g_cfg.scale;
+    glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+    glViewport(0, 0, t.w * S, t.h * S);
+    glUseProgram(g_prog);
+    glBindVertexArray(g_vao);
+
+    int x1 = g.arg(0xD4) & 0x3FF, y1 = g.arg(0xD4) >> 10 & 0x3FF;
+    int x2 = g.arg(0xD5) & 0x3FF, y2 = g.arg(0xD5) >> 10 & 0x3FF;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(x1 * S, (t.h - (y2 + 1)) * S, std::max(0, x2 - x1 + 1) * S, std::max(0, y2 - y1 + 1) * S);
+
+    bool through = g.through();
+    bool clear = g.arg(0xD3) & 1;
+    glUniform1i(U("u_through"), through);
+    glUniform1i(U("u_clear"), clear);
+    glUniform2f(U("u_fbSize"), (float)t.w, (float)t.h);
+
+    if (clear) {
+        uint32_t m = g.arg(0xD3);
+        glDisable(GL_BLEND);
+        glDisable(GL_CULL_FACE);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_ALWAYS);
+        glDepthMask(m >> 10 & 1);
+        bool col = m >> 8 & 1, alpha = m >> 9 & 1;
+        glColorMask(col, col, col, alpha);
+        glUniform1i(U("u_texOn"), 0);
+        glUniform1i(U("u_lighting"), 0);
+        glUniform1i(U("u_fog"), 0);
+    } else {
+        if (g.arg(0x23) & 1) {
+            static const GLenum F[8] = {GL_NEVER, GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, GL_LESS, GL_LEQUAL, GL_GREATER, GL_GEQUAL};
+            glEnable(GL_DEPTH_TEST);
+            glDepthFunc(F[g.arg(0xDE) & 7]);
+        } else {
+            glDisable(GL_DEPTH_TEST);
+        }
+        glDepthMask(!(g.arg(0xE7) & 1) && (g.arg(0x23) & 1));
+        uint32_t cm = g.arg(0xE8);
+        glColorMask(!(cm & 0xFF), !(cm >> 8 & 0xFF), !(cm >> 16 & 0xFF), !(g.arg(0xE9) & 0xFF));
+
+        if (g.arg(0x21) & 1) {
+            uint32_t b = g.arg(0xDF);
+            GLenum fa = fix_factor(g.arg(0xE0)), fb = fix_factor(g.arg(0xE1));
+            uint32_t fixc = fa == GL_CONSTANT_COLOR ? g.arg(0xE0) : g.arg(0xE1);
+            glBlendColor((fixc & 0xFF) / 255.f, (fixc >> 8 & 0xFF) / 255.f, (fixc >> 16 & 0xFF) / 255.f, 1.f);
+            glEnable(GL_BLEND);
+            glBlendFuncSeparate(blend_factor(b & 0xF, true, fa), blend_factor(b >> 4 & 0xF, false, fb), GL_ONE, GL_ZERO);
+            static const GLenum EQ[6] = {GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT, GL_MIN, GL_MAX, GL_FUNC_ADD};
+            glBlendEquationSeparate(EQ[std::min<uint32_t>(b >> 8 & 0xF, 5)], GL_FUNC_ADD);
+        } else {
+            glDisable(GL_BLEND);
+        }
+
+        if ((g.arg(0x1D) & 1) && !through && prim == GpuPrim::Triangles) {
+            glEnable(GL_CULL_FACE);
+            glFrontFace(GL_CCW);
+            glCullFace((g.arg(0x9B) & 1) ? GL_FRONT : GL_BACK);
+        } else {
+            glDisable(GL_CULL_FACE);
+        }
+
+        float m[16];
+        mat43_to_44(world, m);
+        glUniformMatrix4fv(U("u_world"), 1, GL_FALSE, m);
+        mat43_to_44(view, m);
+        glUniformMatrix4fv(U("u_view"), 1, GL_FALSE, m);
+        glUniformMatrix4fv(U("u_proj"), 1, GL_FALSE, proj);
+        float ox = g.f24(0x45) - (g.arg(0x4C) & 0xFFFF) / 16.f;
+        float oy = g.f24(0x46) - (g.arg(0x4D) & 0xFFFF) / 16.f;
+        glUniform3f(U("u_vpScale"), g.f24(0x42), g.f24(0x43), g.f24(0x44));
+        glUniform3f(U("u_vpOff"), ox, oy, g.f24(0x47));
+        glUniform4f(U("u_uvScaleOff"), g.f24(0x48), g.f24(0x49), g.f24(0x4A), g.f24(0x4B));
+        set_light_uniforms(g);
+
+        bool tex_on = (g.arg(0x1E) & 1) && g.tex;
+        glUniform1i(U("u_texOn"), tex_on);
+        if (tex_on) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, g.tex);
+            if (!g.tex_flip) {
+                bool linear = g.arg(0xC6) >> 8 & 1;
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (g.arg(0xC7) & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (g.arg(0xC7) >> 8 & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+            }
+            glUniform1i(U("u_texFlipY"), g.tex_flip);
+            glUniform2f(U("u_texSize"), g.tex_w, g.tex_h);
+            uint32_t tf = g.arg(0xC9);
+            glUniform1i(U("u_texFunc"), tf & 7);
+            glUniform1i(U("u_texRGBA"), tf >> 8 & 1);
+            glUniform1i(U("u_colorDouble"), tf >> 16 & 1);
+            float env[3];
+            g.color(0xCA, env);
+            glUniform3fv(U("u_envColor"), 1, env);
+        }
+
+        uint32_t at = g.arg(0xDB);
+        glUniform1i(U("u_alphaTest"), g.arg(0x22) & 1);
+        glUniform1i(U("u_alphaFunc"), at & 7);
+        glUniform1i(U("u_alphaRef"), at >> 8 & 0xFF);
+        glUniform1i(U("u_alphaMask"), at >> 16 & 0xFF);
+
+        bool fog = (g.arg(0x1F) & 1) && !through;
+        glUniform1i(U("u_fog"), fog);
+        if (fog) {
+            float fc[3];
+            g.color(0xCF, fc);
+            glUniform3fv(U("u_fogColor"), 1, fc);
+            glUniform2f(U("u_fogCoef"), g.f24(0xCD), g.f24(0xCE));
+        }
+    }
+
+    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
+    glBufferData(GL_ARRAY_BUFFER, count * sizeof(GpuVertex), v, GL_STREAM_DRAW);
+    glDrawArrays(prim == GpuPrim::Triangles ? GL_TRIANGLES : prim == GpuPrim::Lines ? GL_LINES : GL_POINTS, 0, count);
+}
+
+void execute(const DrawCmd &d) {
+    execute(d.snap, d.prim, d.verts.data(), (int)d.verts.size(), d.snap.world, d.snap.view, d.snap.proj);
+}
+
+// Copia el framebuffer de la PSP (FBO o memoria si lo escribió la CPU) a la ventana con bandas.
+void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
+    int ww, wh;
+    window_drawable_size(&ww, &wh);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(1, 1, 1, 1);
+    glViewport(0, 0, ww, wh);
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    auto it = g_targets.find(fb_addr & 0x1FFFF0);
+    GLuint src_fbo;
+    int sw, sh;
+    if (it != g_targets.end()) {
+        // La GE ha dibujado ahí: se usa su FBO aunque no se redibuje cada vblank (cargas).
+        g_presented = &it->second;
+        src_fbo = it->second.fbo;
+        sw = it->second.w * g_cfg.scale;
+        sh = it->second.h * g_cfg.scale;
+    } else if (fb_addr) {
+        // Framebuffer escrito por la CPU (vídeos): se sube tal cual.
+        g_presented = nullptr;
+        std::vector<uint8_t> px(480 * 272 * 4);
+        for (int y = 0; y < 272; y++)
+            for (int x = 0; x < 480; x++) {
+                uint8_t *o = &px[((271 - y) * 480 + x) * 4];
+                if (fmt == 3) {
+                    memcpy(o, MEMP(fb_addr + (y * stride + x) * 4), 4);
+                } else {
+                    uint16_t p = R16(fb_addr + (y * stride + x) * 2);
+                    if (fmt == 0) { o[0] = (p & 0x1F) << 3; o[1] = (p >> 5 & 0x3F) << 2; o[2] = (p >> 11) << 3; }
+                    else if (fmt == 1) { o[0] = (p & 0x1F) << 3; o[1] = (p >> 5 & 0x1F) << 3; o[2] = (p >> 10 & 0x1F) << 3; }
+                    else { o[0] = (p & 0xF) << 4; o[1] = (p >> 4 & 0xF) << 4; o[2] = (p >> 8 & 0xF) << 4; }
+                }
+                o[3] = 255;
+            }
+        glBindTexture(GL_TEXTURE_2D, g_cpu_tex);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 480, 272, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, g_cpu_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_cpu_tex, 0);
+        src_fbo = g_cpu_fbo;
+        sw = 480;
+        sh = 272;
+    } else {
+        window_swap();
+        return;
+    }
+    float aspect = 480.f / 272.f;
+    int dw = ww, dh = (int)(ww / aspect);
+    if (dh > wh) { dh = wh; dw = (int)(wh * aspect); }
+    int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+    glBlitFramebuffer(0, 0, sw, sh, dx, dy, dx + dw, dy + dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    window_swap();
+}
+
+// ---------------------------------------------------------------- interpolación
+inline float lerp(float a, float b, float t) { return a + (b - a) * t; }
+
+// Un salto grande de cámara (corte) no se interpola.
+bool camera_cut(const float *a, const float *b) {
+    float dt = 0, dr = 0;
+    for (int i = 9; i < 12; i++) dt += (a[i] - b[i]) * (a[i] - b[i]);
+    for (int i = 0; i < 9; i++) dr += (a[i] - b[i]) * (a[i] - b[i]);
+    return dt > 400.f || dr > 0.5f;
+}
+
+void render_interpolated(float t) {
+    // dibujos del fotograma anterior por clave y ocurrencia
+    std::unordered_map<uint64_t, std::vector<const DrawCmd *>> prev;
+    for (const DrawCmd &d : g_prev.cmds) prev[d.key].push_back(&d);
+    std::unordered_map<uint64_t, size_t> seen;
+    float world[12], view[12], proj[16];
+    for (const DrawCmd &d : g_last.cmds) {
+        const DrawCmd *p = nullptr;
+        auto it = prev.find(d.key);
+        size_t occ = seen[d.key]++;
+        if (it != prev.end() && occ < it->second.size()) p = it->second[occ];
+        if (!p || d.snap.through() || t >= 1.f || camera_cut(p->snap.view, d.snap.view)) {
+            execute(d);
+            continue;
+        }
+        for (int i = 0; i < 12; i++) {
+            world[i] = lerp(p->snap.world[i], d.snap.world[i], t);
+            view[i] = lerp(p->snap.view[i], d.snap.view[i], t);
+        }
+        for (int i = 0; i < 16; i++) proj[i] = lerp(p->snap.proj[i], d.snap.proj[i], t);
+        const GpuVertex *verts = d.verts.data();
+        if (p->verts.size() == d.verts.size()) {  // mallas deformadas (skinning en CPU): se interpolan vértices
+            bool differ = memcmp(p->verts.data(), d.verts.data(), d.verts.size() * sizeof(GpuVertex)) != 0;
+            if (differ) {
+                g_lerp_verts = d.verts;
+                for (size_t i = 0; i < d.verts.size(); i++)
+                    for (int k = 0; k < 3; k++) {
+                        g_lerp_verts[i].pos[k] = lerp(p->verts[i].pos[k], d.verts[i].pos[k], t);
+                        g_lerp_verts[i].nrm[k] = lerp(p->verts[i].nrm[k], d.verts[i].nrm[k], t);
+                    }
+                verts = g_lerp_verts.data();
+            }
+        }
+        execute(d.snap, d.prim, verts, (int)d.verts.size(), world, view, proj);
+    }
+}
+
 }  // namespace
 
 bool renderer_init(const RendererConfig &cfg) {
@@ -383,197 +665,86 @@ bool renderer_init(const RendererConfig &cfg) {
     glVertexAttribPointer(3, 4, GL_UNSIGNED_BYTE, GL_TRUE, sizeof(GpuVertex), (void *)offsetof(GpuVertex, col));
     glGenTextures(1, &g_cpu_tex);
     glGenFramebuffers(1, &g_cpu_fbo);
-    LOGI("gpu", "renderizador OpenGL listo (escala x%d)", cfg.scale);
+
+    int hz = cfg.max_fps;
+    if (cfg.interpolate && hz <= 0) {
+        SDL_DisplayMode mode;
+        hz = SDL_GetCurrentDisplayMode(0, &mode) == 0 && mode.refresh_rate > 0 ? mode.refresh_rate : 144;
+    }
+    g_present_interval = cfg.interpolate ? 1000000ULL / std::max(hz, 30) : 0;
+    LOGI("gpu", "renderizador OpenGL listo (escala x%d, %s)", cfg.scale,
+         cfg.interpolate ? ("interpolación a " + std::to_string(hz) + " fps").c_str() : "sin interpolación");
     return true;
 }
 
-void renderer_draw(GpuPrim prim, const GpuVertex *v, int count) {
-    const GeState &g = g_ge;
-    Target &t = target_for(g.fb_addr());
-    t.last_frame = g_frame;
-    int S = g_cfg.scale;
-    glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-    glViewport(0, 0, t.w * S, t.h * S);
-    glUseProgram(g_prog);
-    glBindVertexArray(g_vao);
+bool renderer_interpolating() { return g_cfg.interpolate; }
 
-    // scissor
-    int x1 = g.arg(0xD4) & 0x3FF, y1 = g.arg(0xD4) >> 10 & 0x3FF;
-    int x2 = g.arg(0xD5) & 0x3FF, y2 = g.arg(0xD5) >> 10 & 0x3FF;
-    glEnable(GL_SCISSOR_TEST);
-    glScissor(x1 * S, (t.h - (y2 + 1)) * S, std::max(0, x2 - x1 + 1) * S, std::max(0, y2 - y1 + 1) * S);
-
-    bool through = g.through();
-    bool clear = g.arg(0xD3) & 1;
-    glUniform1i(U("u_through"), through);
-    glUniform1i(U("u_clear"), clear);
-    glUniform2f(U("u_fbSize"), (float)t.w, (float)t.h);
-
-    if (clear) {
-        uint32_t m = g.arg(0xD3);
-        glDisable(GL_BLEND);
-        glDisable(GL_CULL_FACE);
-        glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_ALWAYS);
-        glDepthMask(m >> 10 & 1);
-        bool col = m >> 8 & 1, alpha = m >> 9 & 1;
-        glColorMask(col, col, col, alpha);
-        glUniform1i(U("u_texOn"), 0);
-        glUniform1i(U("u_lighting"), 0);
-        glUniform1i(U("u_fog"), 0);
-    } else {
-        // profundidad
-        if (g.arg(0x23) & 1) {
-            static const GLenum F[8] = {GL_NEVER, GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, GL_LESS, GL_LEQUAL, GL_GREATER, GL_GEQUAL};
-            glEnable(GL_DEPTH_TEST);
-            glDepthFunc(F[g.arg(0xDE) & 7]);
-        } else {
-            glDisable(GL_DEPTH_TEST);
-        }
-        glDepthMask(!(g.arg(0xE7) & 1) && (g.arg(0x23) & 1));
-        uint32_t cm = g.arg(0xE8);
-        glColorMask(!(cm & 0xFF), !(cm >> 8 & 0xFF), !(cm >> 16 & 0xFF), !(g.arg(0xE9) & 0xFF));
-
-        // mezcla
-        if (g.arg(0x21) & 1) {
-            uint32_t b = g.arg(0xDF);
-            GLenum fa = fix_factor(g.arg(0xE0)), fb = fix_factor(g.arg(0xE1));
-            uint32_t fixc = fa == GL_CONSTANT_COLOR ? g.arg(0xE0) : g.arg(0xE1);
-            glBlendColor((fixc & 0xFF) / 255.f, (fixc >> 8 & 0xFF) / 255.f, (fixc >> 16 & 0xFF) / 255.f, 1.f);
-            glEnable(GL_BLEND);
-            GLenum src = blend_factor(b & 0xF, true, fa), dst = blend_factor(b >> 4 & 0xF, false, fb);
-            glBlendFuncSeparate(src, dst, GL_ONE, GL_ZERO);
-            static const GLenum EQ[6] = {GL_FUNC_ADD, GL_FUNC_SUBTRACT, GL_FUNC_REVERSE_SUBTRACT, GL_MIN, GL_MAX, GL_FUNC_ADD};
-            GLenum eq = EQ[std::min<uint32_t>(b >> 8 & 0xF, 5)];
-            glBlendEquationSeparate(eq, GL_FUNC_ADD);
-        } else {
-            glDisable(GL_BLEND);
-        }
-
-        // culling (no se aplica en through)
-        if ((g.arg(0x1D) & 1) && !through && prim == GpuPrim::Triangles) {
-            glEnable(GL_CULL_FACE);
-            glFrontFace(GL_CCW);
-            glCullFace((g.arg(0x9B) & 1) ? GL_FRONT : GL_BACK);
-        } else {
-            glDisable(GL_CULL_FACE);
-        }
-
-        // matrices y viewport de la GE
-        float m[16];
-        mat43_to_44(g.world, m);
-        glUniformMatrix4fv(U("u_world"), 1, GL_FALSE, m);
-        mat43_to_44(g.view, m);
-        glUniformMatrix4fv(U("u_view"), 1, GL_FALSE, m);
-        glUniformMatrix4fv(U("u_proj"), 1, GL_FALSE, g.proj);
-        float ox = g.f24(0x45) - (g.arg(0x4C) & 0xFFFF) / 16.f;
-        float oy = g.f24(0x46) - (g.arg(0x4D) & 0xFFFF) / 16.f;
-        glUniform3f(U("u_vpScale"), g.f24(0x42), g.f24(0x43), g.f24(0x44));
-        glUniform3f(U("u_vpOff"), ox, oy, g.f24(0x47));
-        glUniform4f(U("u_uvScaleOff"), g.f24(0x48), g.f24(0x49), g.f24(0x4A), g.f24(0x4B));
-        set_light_uniforms();
-
-        // textura
-        bool tex_on = g.arg(0x1E) & 1;
-        glUniform1i(U("u_texOn"), tex_on);
-        if (tex_on) {
-            glActiveTexture(GL_TEXTURE0);
-            bind_texture();
-            uint32_t tf = g.arg(0xC9);
-            glUniform1i(U("u_texFunc"), tf & 7);
-            glUniform1i(U("u_texRGBA"), tf >> 8 & 1);
-            glUniform1i(U("u_colorDouble"), tf >> 16 & 1);
-            float env[3];
-            g.color(0xCA, env);
-            glUniform3fv(U("u_envColor"), 1, env);
-        }
-
-        // prueba de alfa
-        uint32_t at = g.arg(0xDB);
-        glUniform1i(U("u_alphaTest"), g.arg(0x22) & 1);
-        glUniform1i(U("u_alphaFunc"), at & 7);
-        glUniform1i(U("u_alphaRef"), at >> 8 & 0xFF);
-        glUniform1i(U("u_alphaMask"), at >> 16 & 0xFF);
-
-        // niebla
-        bool fog = (g.arg(0x1F) & 1) && !through;
-        glUniform1i(U("u_fog"), fog);
-        if (fog) {
-            float fc[3];
-            g.color(0xCF, fc);
-            glUniform3fv(U("u_fogColor"), 1, fc);
-            glUniform2f(U("u_fogCoef"), g.f24(0xCD), g.f24(0xCE));
-        }
+void renderer_draw(GpuPrim prim, const GpuVertex *v, int count, uint64_t match_key) {
+    DrawCmd d;
+    memcpy(d.snap.cmd, g_ge.cmd, sizeof(d.snap.cmd));
+    memcpy(d.snap.world, g_ge.world, sizeof(d.snap.world));
+    memcpy(d.snap.view, g_ge.view, sizeof(d.snap.view));
+    memcpy(d.snap.proj, g_ge.proj, sizeof(d.snap.proj));
+    if ((g_ge.arg(0x1E) & 1) && !(g_ge.arg(0xD3) & 1)) resolve_texture(d.snap);
+    d.prim = prim;
+    d.key = match_key;
+    if (!g_cfg.interpolate) {
+        execute(d.snap, prim, v, count, d.snap.world, d.snap.view, d.snap.proj);
+        return;
     }
-
-    glBindBuffer(GL_ARRAY_BUFFER, g_vbo);
-    glBufferData(GL_ARRAY_BUFFER, count * sizeof(GpuVertex), v, GL_STREAM_DRAW);
-    glDrawArrays(prim == GpuPrim::Triangles ? GL_TRIANGLES : prim == GpuPrim::Lines ? GL_LINES : GL_POINTS, 0, count);
+    d.verts.assign(v, v + count);
+    g_recording.cmds.push_back(std::move(d));
 }
 
 void renderer_invalidate(uint32_t, uint32_t) {}
 
-void renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
-    int ww, wh;
-    window_drawable_size(&ww, &wh);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glDisable(GL_SCISSOR_TEST);
-    glColorMask(1, 1, 1, 1);
-    glViewport(0, 0, ww, wh);
-    glClearColor(0, 0, 0, 1);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    uint32_t off = fb_addr & 0x1FFFF0;
-    auto it = g_targets.find(off);
-    GLuint src_fbo;
-    int sw, sh;
-    // Si la GE ha dibujado alguna vez en esa dirección se usa su FBO (aunque no se redibuje cada fotograma,
-    // como en las cargas); si no, el contenido lo ha escrito la CPU (vídeos) y se sube desde memoria.
-    if (it != g_targets.end()) {
-        g_presented = &it->second;
-        src_fbo = it->second.fbo;
-        sw = it->second.w * g_cfg.scale;
-        sh = it->second.h * g_cfg.scale;
-    } else if (fb_addr) {
-        // framebuffer escrito por la CPU (vídeos, cargas): se sube tal cual
-        g_presented = nullptr;
-        std::vector<uint8_t> px(480 * 272 * 4);
-        for (int y = 0; y < 272; y++)
-            for (int x = 0; x < 480; x++) {
-                uint8_t *o = &px[((271 - y) * 480 + x) * 4];
-                if (fmt == 3) {
-                    memcpy(o, MEMP(fb_addr + (y * stride + x) * 4), 4);
-                } else {
-                    uint16_t p = R16(fb_addr + (y * stride + x) * 2);
-                    if (fmt == 0) { o[0] = (p & 0x1F) << 3; o[1] = (p >> 5 & 0x3F) << 2; o[2] = (p >> 11) << 3; }
-                    else if (fmt == 1) { o[0] = (p & 0x1F) << 3; o[1] = (p >> 5 & 0x1F) << 3; o[2] = (p >> 10 & 0x1F) << 3; }
-                    else { o[0] = (p & 0xF) << 4; o[1] = (p >> 4 & 0xF) << 4; o[2] = (p >> 8 & 0xF) << 4; }
-                }
-                o[3] = 255;
-            }
-        glBindTexture(GL_TEXTURE_2D, g_cpu_tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 480, 272, 0, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        glBindFramebuffer(GL_FRAMEBUFFER, g_cpu_fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_cpu_tex, 0);
-        src_fbo = g_cpu_fbo;
-        sw = 480;
-        sh = 272;
-    } else {
-        window_swap();
-        g_frame++;
+void renderer_flip(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
+    if (!g_cfg.interpolate) return;
+    if (g_recording.cmds.empty() && g_have_last) {  // flip sin dibujos nuevos: se mantiene el fotograma
+        g_last.display = fb_addr;
         return;
     }
-    // ajuste con bandas manteniendo la proporción 480:272
-    float aspect = 480.f / 272.f;
-    int dw = ww, dh = (int)(ww / aspect);
-    if (dh > wh) { dh = wh; dw = (int)(wh * aspect); }
-    int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, src_fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
-    glBlitFramebuffer(0, 0, sw, sh, dx, dy, dx + dw, dy + dh, GL_COLOR_BUFFER_BIT, GL_LINEAR);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    window_swap();
-    g_frame++;
+    count_stats(true);
+    g_recording.t_us = time_us();
+    g_recording.display = fb_addr;
+    g_recording.stride = stride;
+    g_recording.fmt = fmt;
+    if (g_have_last) {
+        g_prev = std::move(g_last);
+        g_have_prev = true;
+    }
+    g_last = std::move(g_recording);
+    g_have_last = true;
+    g_recording = Frame();
+}
+
+uint64_t renderer_next_present_in() {
+    if (!g_cfg.interpolate || !g_have_last) return UINT64_MAX;
+    uint64_t now = time_us(), due = g_last_present + g_present_interval;
+    return due > now ? due - now : 0;
+}
+
+bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
+    if (!g_cfg.interpolate || !g_have_last) {
+        blit_to_window(fb_addr, stride, fmt);
+        return true;
+    }
+    uint64_t now = time_us();
+    if (now < g_last_present + g_present_interval) return false;
+    g_last_present = now;
+    // Se muestra el fotograma anterior avanzando hacia el último: t = 0 al llegar el último, 1 al cabo
+    // de un intervalo lógico (un fotograma de latencia a cambio de movimiento continuo).
+    float t = 1.f;
+    if (g_have_prev && g_last.t_us > g_prev.t_us) {
+        t = (float)(now - g_last.t_us) / (float)(g_last.t_us - g_prev.t_us);
+        t = std::clamp(t, 0.f, 1.f);
+        render_interpolated(t);
+    } else {
+        for (const DrawCmd &d : g_last.cmds) execute(d);
+    }
+    blit_to_window(g_last.display, g_last.stride, g_last.fmt);
+    count_stats(false);
+    return true;
 }
 
 bool renderer_screenshot(const std::string &path) {

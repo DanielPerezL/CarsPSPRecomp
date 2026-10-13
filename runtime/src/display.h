@@ -17,3 +17,6 @@ void display_set_exit_after(double t);
 void display_init(bool windowed);
 // Se llama en cada vblank: eventos de ventana, presentación y capturas.
 void display_vblank();
+// Se llama cuando todos los hilos del juego esperan: presenta fotogramas interpolados.
+// Devuelve los microsegundos hasta la próxima presentación deseada.
+uint64_t display_idle();

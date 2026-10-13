@@ -33,6 +33,7 @@ void display_set_framebuf(uint32_t addr, uint32_t stride, uint32_t fmt) {
         g_fb_addr = addr;
         g_fb_stride = stride;
         g_fb_fmt = fmt;
+        if (g_windowed) renderer_flip(addr, stride, fmt);
     }
 }
 
@@ -100,7 +101,7 @@ void display_vblank() {
         LOGI("display", "ventana cerrada");
         exit(0);
     }
-    renderer_present(g_fb_addr, g_fb_stride, g_fb_fmt);
+    if (!renderer_interpolating()) renderer_present(g_fb_addr, g_fb_stride, g_fb_fmt);
     double now = time_us() / 1e6;
     for (auto &s : g_shots)
         if (!s.done && now >= s.t) {
@@ -111,4 +112,13 @@ void display_vblank() {
         LOGI("display", "fin de la prueba (%.1f s)", g_exit_after);
         exit(0);
     }
+}
+
+uint64_t display_idle() {
+    if (!g_windowed || !renderer_interpolating()) return UINT64_MAX;
+    if (renderer_present(g_fb_addr, g_fb_stride, g_fb_fmt) && !window_poll()) {
+        LOGI("display", "ventana cerrada");
+        exit(0);
+    }
+    return renderer_next_present_in();
 }

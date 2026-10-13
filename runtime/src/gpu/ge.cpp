@@ -200,6 +200,10 @@ void draw_prim(uint32_t arg) {
     Layout l = layout(vtype);
     int idx_fmt = vtype >> 11 & 3;
 
+    // clave para emparejar este dibujo con el del fotograma anterior (interpolación)
+    uint64_t key = ((uint64_t)(idx_fmt ? g_ge.iaddr : g_ge.vaddr) << 32) ^ ((uint64_t)vtype << 8) ^
+                   ((uint64_t)count << 40) ^ g_ge.tex_addr(0) ^ ((uint64_t)prim << 61);
+
     // índices -> vértices
     g_tmp.resize(count);
     std::map<int, int> cache;
@@ -253,7 +257,7 @@ void draw_prim(uint32_t arg) {
     default: return;  // bezier/spline: no se usan en Cars
     }
     g_prims++;
-    if (!g_out.empty()) renderer_draw(gp, g_out.data(), (int)g_out.size());
+    if (!g_out.empty()) renderer_draw(gp, g_out.data(), (int)g_out.size(), key);
 }
 
 void block_transfer() {

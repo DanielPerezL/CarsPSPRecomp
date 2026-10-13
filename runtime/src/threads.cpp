@@ -286,6 +286,8 @@ void sched_run() {
                 if (th->state == ThreadState::Waiting) any = true;
             if (!any) fatal("no quedan hilos vivos ni en espera");
             uint64_t wait = next_event > now ? next_event - now : 0;
+            // Mientras el juego espera se presentan fotogramas interpolados.
+            if (wait > 500) wait = std::min(wait, display_idle());
             if (wait) {
                 timespec ts{(time_t)(wait / 1000000), (long)(wait % 1000000) * 1000};
                 nanosleep(&ts, nullptr);

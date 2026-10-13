@@ -16,6 +16,8 @@ static void usage() {
             "  --iso FICHERO       imagen ISO del UMD de Cars (obligatoria)\n"
             "  --scale N           resolución interna = 480x272 * N (por defecto 4 = 1920x1088)\n"
             "  --size AxB          tamaño inicial de la ventana (por defecto 1280x720)\n"
+            "  --fps N             fotogramas por segundo presentados (por defecto, los del monitor)\n"
+            "  --no-interpolation  sin fotogramas intermedios (30 fps como en la PSP)\n"
             "  --fullscreen        pantalla completa (F11 alterna)\n"
             "  --vsync             sincronizar con el monitor\n"
             "  --headless          sin ventana ni renderizado (solo lógica)\n"
@@ -43,6 +45,8 @@ int main(int argc, char **argv) {
         else if (a == "--image" && i + 1 < argc) image = argv[++i];
         else if (a == "--saves" && i + 1 < argc) g_save_root = argv[++i];
         else if (a == "--scale" && i + 1 < argc) rcfg.scale = atoi(argv[++i]);
+        else if (a == "--no-interpolation") rcfg.interpolate = false;
+        else if (a == "--fps" && i + 1 < argc) rcfg.max_fps = atoi(argv[++i]);
         else if (a == "--size" && i + 1 < argc) sscanf(argv[++i], "%dx%d", &wcfg.width, &wcfg.height);
         else if (a == "--fullscreen") wcfg.fullscreen = true;
         else if (a == "--vsync") wcfg.vsync = true;
