@@ -270,7 +270,8 @@ void block_transfer() {
     uint32_t bpp = (g_ge.arg(0xEA) & 1) ? 4 : 2;
     for (uint32_t y = 0; y < h; y++)
         memmove(MEMP(dst + ((dy + y) * dw + dx) * bpp), MEMP(src + ((sy + y) * sw + sx) * bpp), w * bpp);
-    renderer_invalidate(dst + dy * dw * bpp, h * dw * bpp);
+    // No se marca como escritura de CPU: es una operación de la GE dentro del fotograma (con
+    // interpolación se reproduciría después y dejaría el framebuffer mostrándose desde memoria).
 }
 
 }  // namespace

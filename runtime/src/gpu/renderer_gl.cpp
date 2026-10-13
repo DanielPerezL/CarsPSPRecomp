@@ -703,6 +703,10 @@ void renderer_draw(GpuPrim prim, const GpuVertex *v, int count, uint64_t match_k
     if ((g_ge.arg(0x1E) & 1) && !(g_ge.arg(0xD3) & 1)) resolve_texture(d.snap);
     d.prim = prim;
     d.key = match_key;
+    // La GE vuelve a dibujar en este framebuffer: deja de mostrarse desde memoria. Hay que hacerlo al
+    // grabar, no al ejecutar: con interpolación los dibujos solo se ejecutan si se presenta el FBO.
+    // El FBO se crea ya al grabar: el presentador decide por su existencia si mostrar el FBO o la memoria.
+    target_for(g_ge.fb_addr(), g_ge.cmd[0x9D] & 0x7FF, g_ge.arg(0xD5)).cpu_written = false;
     if (!g_cfg.interpolate) {
         execute(d.snap, prim, v, count, d.snap.world, d.snap.view, d.snap.proj);
         return;
@@ -753,6 +757,14 @@ uint64_t renderer_next_present_in() {
 }
 
 bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
+    static uint64_t dbg_t = 0;
+    if (g_log_level >= LOG_DEBUG && time_us() - dbg_t > 1000000) {
+        dbg_t = time_us();
+        auto it = g_targets.find(fb_addr & 0x1FFFF0);
+        LOGD("gpu", "present fb=%08x cpu=%d existe=%d last=%d (display %08x, %zu dibujos) prev=%d", fb_addr,
+             it != g_targets.end() && it->second.cpu_written, it != g_targets.end(), g_have_last, g_last.display,
+             g_last.cmds.size(), g_have_prev);
+    }
     if (!g_cfg.interpolate || !g_have_last || display_is_cpu(fb_addr)) {
         if (g_cfg.interpolate) {  // sin interpolación posible (vídeo): se limita a la frecuencia de presentación
             uint64_t now = time_us();
