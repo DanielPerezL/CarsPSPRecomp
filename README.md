@@ -23,7 +23,7 @@ CPU.
 | Exportación y sustitución de texturas (recarga en caliente con F5) | ✅ |
 | Multijugador ad hoc | ❌ (la red se inicializa, nunca hay rivales) |
 | Diálogos del sistema y pantalla de Guardar/Cargar (mando, teclado o ratón) | ✅ |
-| Windows (MSYS2/MinGW-w64) | 🚧 preparado, pendiente de probar |
+| Windows 10/11 (compilado desde Linux con MinGW-w64; probado con Wine) | ✅ |
 
 ## Requisitos (Linux)
 
@@ -34,7 +34,21 @@ sudo apt install build-essential python3 git zlib1g-dev libssl-dev \
 
 GPU con OpenGL 3.3 o superior.
 
-## Requisitos (Windows 10/11)
+## Windows 10/11 compilado desde Linux
+
+```bash
+sudo apt install mingw-w64 cmake ninja-build pkg-config curl unzip zip
+python3 tools/setup.py --iso "Disney-Pixar Cars (Spain).iso"   # genera build/gen
+tools/build_windows.sh                                         # → build/windows/Cars.zip
+```
+
+`build_windows.sh` descarga SDL2 y FFmpeg para Windows (versiones fijadas y verificadas por SHA-256),
+compila con MinGW-w64 y empaqueta el ejecutable, sus DLL y la imagen del juego. En Windows basta con
+descomprimir, copiar la ISO a la carpeta y abrir `cars.exe` (busca la `.iso` de su carpeta; los errores
+salen en un cuadro de diálogo y el registro en `cars.log`). El paquete lleva el código del juego
+recompilado: es solo para uso propio, no lo compartas.
+
+## Requisitos (compilar en Windows 10/11)
 
 Con [MSYS2](https://www.msys2.org/), en la consola **MSYS2 MINGW64**:
 

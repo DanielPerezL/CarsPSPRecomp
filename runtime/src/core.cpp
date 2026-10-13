@@ -28,12 +28,12 @@ void log_msg(LogLevel lvl, const char *tag, const char *fmt, ...) {
 }
 
 void fatal(const char *fmt, ...) {
-    fprintf(stderr, "\n*** FATAL: ");
+    char msg[1024];
     va_list ap;
     va_start(ap, fmt);
-    vfprintf(stderr, fmt, ap);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
     va_end(ap);
-    fprintf(stderr, "\n");
+    fprintf(stderr, "\n*** FATAL: %s\n", msg);
     if (Thread *t = thread_current()) {
         Ctx *c = &t->ctx;
         fprintf(stderr, "hilo %d '%s' pc~%08x ra=%08x sp=%08x\n", t->id, t->name.c_str(), c->pc, c->r[31], c->r[29]);
@@ -42,6 +42,7 @@ void fatal(const char *fmt, ...) {
                     i + 2, c->r[i + 2], i + 3, c->r[i + 3]);
     }
     fflush(stderr);
+    os_error_box(msg);
     abort();
 }
 
@@ -157,13 +158,18 @@ extern "C" void recomp_break(Ctx *c, uint32_t pc, uint32_t code) {
 
 extern "C" void recomp_bad_sp(Ctx *c, uint32_t pc) { fatal("sp inválido %08x tras la instrucción %08x", c->r[29], pc); }
 
-static std::unordered_map<uint32_t, jmp_buf> g_jmpbufs;
+// En un struct para conservar la alineación de jmp_buf (16 bytes en Windows x64: setjmp guarda los
+// registros XMM con instrucciones alineadas); como argumento de plantilla se perdería.
+struct HostJmpBuf {
+    jmp_buf buf;
+};
+static std::unordered_map<uint32_t, HostJmpBuf> g_jmpbufs;
 
-extern "C" jmp_buf *recomp_jmpbuf(uint32_t mips_jmpbuf) { return &g_jmpbufs[mips_jmpbuf]; }
+extern "C" jmp_buf *recomp_jmpbuf(uint32_t mips_jmpbuf) { return &g_jmpbufs[mips_jmpbuf].buf; }
 
 extern "C" void recomp_longjmp(Ctx *c, uint32_t mips_jmpbuf) {
     auto it = g_jmpbufs.find(mips_jmpbuf);
     if (it == g_jmpbufs.end()) fatal("longjmp a un jmp_buf %08x sin setjmp previo", mips_jmpbuf);
     (void)c;
-    longjmp(it->second, 1);
+    longjmp(it->second.buf, 1);
 }

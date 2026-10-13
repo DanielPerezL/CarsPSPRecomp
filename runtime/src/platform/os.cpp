@@ -1,5 +1,7 @@
 #include "os.h"
 
+#include <SDL.h>
+
 #include <chrono>
 #include <thread>
 
@@ -139,4 +141,28 @@ void os_localtime(time_t t, struct tm *out) {
 uint64_t os_unix_time_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
                std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+std::string os_exe_dir() {
+    char *base = SDL_GetBasePath();
+    std::string dir = base ? base : "";
+    SDL_free(base);
+    return dir;
+}
+
+void os_redirect_log(const std::string &log_path) {
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h == nullptr || h == INVALID_HANDLE_VALUE) freopen(log_path.c_str(), "w", stderr);
+#else
+    (void)log_path;
+#endif
+}
+
+void os_error_box(const char *text) {
+#ifdef _WIN32
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Cars", text, nullptr);
+#else
+    (void)text;  // en Linux basta con stderr
+#endif
 }

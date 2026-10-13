@@ -42,6 +42,10 @@ target_include_directories(cars PRIVATE runtime/include runtime/src runtime/thir
 target_compile_options(cars PRIVATE -Wall -Wextra -fno-strict-aliasing)
 target_link_libraries(cars PRIVATE PkgConfig::SDL2 PkgConfig::FFMPEG ${CMAKE_DL_LIBS})
 if(WIN32)
+  enable_language(RC)
+  target_sources(cars PRIVATE runtime/win/cars.rc)
+  # printf de C99 (%zu) en vez del de msvcrt
+  target_compile_definitions(cars PRIVATE __USE_MINGW_ANSI_STDIO=1)
   target_link_options(cars PRIVATE -static-libgcc -static-libstdc++)
 endif()
 set_target_properties(cars PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_SOURCE_DIR}/build")

@@ -1,10 +1,15 @@
 // Arranque: carga la imagen relocalizada, crea el hilo principal del módulo y entra en el planificador.
+#include <SDL.h>  // en Windows, SDL sustituye main por SDL_main
+
+#include <algorithm>
 #include <cstdlib>
+#include <filesystem>
 #include <string>
 
 #include "display.h"
 #include "gpu/renderer.h"
 #include "iso.h"
+#include "platform/os.h"
 #include "platform/window.h"
 #include "threads.h"
 
@@ -13,7 +18,7 @@ void audio_init(bool enabled, const std::string &record_path);
 static void usage() {
     fprintf(stderr,
             "uso: cars --iso JUEGO.iso [opciones]\n"
-            "  --iso FICHERO       imagen ISO del UMD de Cars (obligatoria)\n"
+            "  --iso FICHERO       imagen ISO del UMD de Cars (por defecto, la .iso junto al ejecutable)\n"
             "  --scale N           resolución interna = 480x272 * N (por defecto 4 = 1920x1088)\n"
             "  --size AxB          tamaño inicial de la ventana (por defecto 1280x720)\n"
             "  --fps N             fotogramas por segundo presentados (por defecto, los del monitor)\n"
@@ -28,14 +33,28 @@ static void usage() {
             "  --screenshot T:F    captura en el segundo T al fichero F (.ppm); repetible\n"
             "  --exit-after T      salir tras T segundos\n"
             "  --record-audio F    guarda la mezcla de audio en un WAV\n"
-            "  --image FICHERO     imagen relocalizada (por defecto build/gen/image.bin)\n"
+            "  --image FICHERO     imagen relocalizada (por defecto build/gen/image.bin o image.bin junto al\n"
+            "                      ejecutable)\n"
             "  --saves DIR         carpeta de partidas (por defecto saves)\n"
             "  -v | -vv            más registro (estado de hilos / traza de llamadas al sistema)\n");
     exit(1);
 }
 
+// Primera .iso de la carpeta (para lanzar el juego con doble clic, con la ISO junto al ejecutable).
+static std::string find_iso(const std::string &dir) {
+    std::error_code ec;
+    for (auto &e : std::filesystem::directory_iterator(dir.empty() ? "." : dir, ec)) {
+        std::string ext = e.path().extension().string();
+        std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+        if (ext == ".iso" && e.is_regular_file(ec)) return e.path().string();
+    }
+    return "";
+}
+
 int main(int argc, char **argv) {
-    std::string image = "build/gen/image.bin";
+    const std::string exe_dir = os_exe_dir();
+    os_redirect_log(exe_dir + "cars.log");
+    std::string image;
     std::string iso;
     WindowConfig wcfg;
     RendererConfig rcfg;
@@ -72,9 +91,20 @@ int main(int argc, char **argv) {
     }
     if (const char *lvl = getenv("CARS_LOG")) g_log_level = atoi(lvl);
 
+    if (iso.empty()) iso = find_iso(exe_dir);
+    if (iso.empty()) iso = find_iso("");
     if (iso.empty() || !iso_open(iso)) {
-        fprintf(stderr, "no se pudo abrir la ISO '%s'\n", iso.c_str());
+        std::string msg = iso.empty() ? "No se encuentra la ISO de Cars: ponla junto al ejecutable o indícala con --iso."
+                                       : "No se pudo abrir la ISO '" + iso + "'.";
+        fprintf(stderr, "%s\n", msg.c_str());
+        os_error_box(msg.c_str());
         usage();
+    }
+    if (image.empty()) {
+        std::error_code ec;
+        image = "build/gen/image.bin";
+        if (!std::filesystem::exists(image, ec) && std::filesystem::exists(exe_dir + "image.bin", ec))
+            image = exe_dir + "image.bin";
     }
     mem_init();
     FILE *f = fopen(image.c_str(), "rb");

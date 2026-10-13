@@ -99,6 +99,12 @@ Decisiones del runtime:
   juego no recibe los botones, ni tampoco la pulsación que los cierra.
 - **SAS:** `KeyOn` sobre una voz que sigue sonando no la reinicia (ni `KeyOff` sobre una apagada), como en
   la PSP. El juego repite `KeyOn` de los sonidos en bucle (roces, chirridos); reiniciarlos los cortaba.
+- **Windows:** se compila desde Linux con `tools/build_windows.sh` (MinGW-w64, variante *posix* de los
+  hilos: la *win32* de Debian no trae `std::condition_variable`). Las fibers son las de Win32. El `jmp_buf`
+  va dentro de un struct para conservar su alineación de 16 bytes (el `setjmp` de x64 guarda los XMM con
+  instrucciones alineadas). Un manifiesto pone UTF-8 como página de códigos (rutas con acentos) y declara
+  DPI por monitor. Es una aplicación de ventana: sin consola, stderr va a `cars.log` y los errores fatales
+  a un cuadro de diálogo.
 - **Partidas** (`sceUtilitySavedata`): el autoguardado y la carga al arrancar usan los modos automáticos
   (AUTOSAVE/AUTOLOAD/SIZES), que en la PSP no muestran nada y terminan al momento. *Opciones → Guardar/Cargar*
   usa SAVE y LOAD, que sí abren la pantalla del sistema: confirmación (sobrescribir con «No» por defecto),
@@ -111,4 +117,4 @@ Decisiones del runtime:
 
 - Jugable: arranque, vídeos, menús, partidas guardadas y carreras con sonido.
 - Pendiente: multijugador ad hoc, fuentes PGF del sistema,
-  reverberación del SAS, port a Windows.
+  reverberación del SAS.
