@@ -16,3 +16,5 @@ struct TexParams {
 uint64_t texture_decode(const TexParams &p, const uint8_t *clut, std::vector<uint8_t> &rgba);
 // Hash rápido del contenido sin decodificar (para validar la caché en cada uso).
 uint64_t texture_hash(const TexParams &p, const uint8_t *clut);
+// Color de la CLUT para un índice ya desplazado/enmascarado por el registro 0xC5 (shift, máscara e inicio).
+void clut_color(const uint8_t *clut, uint32_t clutfmt, uint32_t index, uint8_t *o);

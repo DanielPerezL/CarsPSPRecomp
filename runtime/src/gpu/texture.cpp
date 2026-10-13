@@ -59,21 +59,6 @@ void linear_data(const TexParams &p, std::vector<uint8_t> &out) {
             for (int r = 0; r < 8; r++, i += 16) memcpy(&out[(by + r) * rb + x * 16], src + i, 16);
 }
 
-void clut_color(const uint8_t *clut, uint32_t clutfmt, uint32_t index, uint8_t *o) {
-    uint32_t shift = clutfmt >> 2 & 0x1F, mask = clutfmt >> 8 & 0xFF, start = (clutfmt >> 16 & 0x1F) << 4;
-    uint32_t i = ((index >> shift) & mask) | start;
-    switch (clutfmt & 3) {
-    case 3: memcpy(o, clut + (i & 0x1FF) * 4, 4); break;
-    default: {
-        uint16_t v;
-        memcpy(&v, clut + (i & 0x3FF) * 2, 2);
-        if ((clutfmt & 3) == 0) c565(v, o);
-        else if ((clutfmt & 3) == 1) c5551(v, o);
-        else c4444(v, o);
-    }
-    }
-}
-
 void dxt_block(const uint8_t *b, int format, uint8_t out[16][4]) {
     const uint8_t *cb = format == 8 ? b : b + 8;  // en DXT3/5 el color va después del alfa
     // En la PSP el bloque DXT está reordenado: índices (4 bytes) y luego los dos colores 565.
@@ -116,6 +101,21 @@ void dxt_block(const uint8_t *b, int format, uint8_t out[16][4]) {
 }
 
 }  // namespace
+
+void clut_color(const uint8_t *clut, uint32_t clutfmt, uint32_t index, uint8_t *o) {
+    uint32_t shift = clutfmt >> 2 & 0x1F, mask = clutfmt >> 8 & 0xFF, start = (clutfmt >> 16 & 0x1F) << 4;
+    uint32_t i = ((index >> shift) & mask) | start;
+    switch (clutfmt & 3) {
+    case 3: memcpy(o, clut + (i & 0x1FF) * 4, 4); break;
+    default: {
+        uint16_t v;
+        memcpy(&v, clut + (i & 0x3FF) * 2, 2);
+        if ((clutfmt & 3) == 0) c565(v, o);
+        else if ((clutfmt & 3) == 1) c5551(v, o);
+        else c4444(v, o);
+    }
+    }
+}
 
 uint64_t texture_hash(const TexParams &p, const uint8_t *clut) {
     uint64_t h = fnv(MEMP(p.addr), data_bytes(p));

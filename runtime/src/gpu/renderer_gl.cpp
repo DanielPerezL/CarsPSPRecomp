@@ -19,6 +19,16 @@
 
 namespace {
 
+// Valor de 16 bits de un píxel guardado como RGBA8 en un framebuffer de la PSP de 16 bits (565, 5551, 4444).
+// Se trunca igual que la GE al escribir en 16 bits.
+#define RAW16_GLSL \
+    "uint raw16(vec4 c, int fmt) {\n" \
+    "    uvec4 v = uvec4(c * 255.0 + 0.5);\n" \
+    "    if (fmt == 0) return v.r >> 3 | (v.g >> 2) << 5 | (v.b >> 3) << 11;\n" \
+    "    if (fmt == 1) return v.r >> 3 | (v.g >> 3) << 5 | (v.b >> 3) << 10 | (v.a >> 7) << 15;\n" \
+    "    return v.r >> 4 | (v.g >> 4) << 4 | (v.b >> 4) << 8 | (v.a >> 4) << 12;\n" \
+    "}\n"
+
 const char *VS = R"(#version 330 core
 layout(location = 0) in vec3 a_pos;
 layout(location = 1) in vec3 a_nrm;
@@ -31,6 +41,7 @@ uniform vec3 u_vpScale, u_vpOff;
 uniform vec2 u_fbSize;
 uniform vec4 u_uvScaleOff;
 uniform vec2 u_texSize;
+uniform vec2 u_uvFix;  // framebuffer como textura: tamaño de la textura de la PSP / tamaño del framebuffer
 
 uniform int u_lighting, u_matUpdate, u_lightMode;
 uniform vec4 u_matAmbient;     // rgb + alfa
@@ -64,7 +75,7 @@ void main() {
     vec3 px = clip.xyz / clip.w * u_vpScale + u_vpOff;
     vec3 ndc = vec3(px.x / u_fbSize.x * 2.0 - 1.0, 1.0 - px.y / u_fbSize.y * 2.0, px.z / 65535.0 * 2.0 - 1.0);
     gl_Position = vec4(ndc * clip.w, clip.w);
-    v_uv = a_uv * u_uvScaleOff.xy + u_uvScaleOff.zw;
+    v_uv = (a_uv * u_uvScaleOff.xy + u_uvScaleOff.zw) * u_uvFix;
     v_fog = clamp((vpos.z + u_fogCoef.x) * u_fogCoef.y, 0.0, 1.0);
 
     if (u_lighting == 0) {
@@ -118,11 +129,53 @@ out vec4 o_color;
 
 uniform sampler2D u_tex;
 uniform int u_texOn, u_texFunc, u_texRGBA, u_colorDouble, u_texFlipY;
+// Framebuffer leído como textura con CLUT: 0 = no (RGBA tal cual), 1 = píxeles de 16 bits (CLUT16),
+// 2 = profundidad de 16 bits (CLUT16), 3 = píxeles de 32 bits (CLUT32).
+uniform int u_texClut, u_srcFmt;
+uniform sampler2D u_clut;          // 512x1, ya convertida a RGBA
+uniform ivec3 u_clutIdx;           // desplazamiento, máscara, inicio
+uniform int u_texFb, u_fbScale, u_fbLinear;  // textura = framebuffer a u_fbScale x la resolución de la PSP
+uniform vec2 u_texSize;
 uniform vec3 u_envColor;
 uniform int u_alphaTest, u_alphaFunc, u_alphaRef, u_alphaMask;
 uniform int u_fog;
 uniform vec3 u_fogColor;
 uniform int u_clear;
+uniform vec3 u_srcMul;  // factor fijo de la fuente cuando la mezcla usa dos colores fijos distintos
+
+
+)" RAW16_GLSL R"(
+vec4 apply_clut(vec4 t) {
+    uvec4 b = uvec4(t * 255.0 + 0.5);
+    uint raw = u_texClut == 1 ? raw16(t, u_srcFmt)
+             : u_texClut == 2 ? uint(t.r * 65535.0 + 0.5)
+             : b.r | b.g << 8 | b.b << 16 | b.a << 24;
+    uint i = ((raw >> uint(u_clutIdx.x)) & uint(u_clutIdx.y)) | uint(u_clutIdx.z);
+    return texelFetch(u_clut, ivec2(int(i & 511u), 0), 0);
+}
+
+// Píxel q (de la PSP) del framebuffer: el centro de su bloque escalado, con la CLUT aplicada.
+vec4 fb_texel(ivec2 q) {
+    q = clamp(q, ivec2(0), ivec2(u_texSize) - 1);
+    return apply_clut(texelFetch(u_tex, q * u_fbScale + u_fbScale / 2, 0));
+}
+
+// Framebuffer como textura, filtrado como en la PSP: con CLUT (índices o profundidad) se filtra el color ya
+// convertido entre píxeles de la PSP; sin CLUT, al reducir se lee el mipmap de la resolución de la PSP
+// (un punto de cada bloque escalado centelleaba con la cámara en movimiento).
+vec4 sample_fb(vec2 uv) {
+    vec2 p = uv * u_texSize;
+    if (u_texClut != 0) {
+        if (u_fbLinear == 0) return fb_texel(ivec2(floor(p)));
+        p -= 0.5;
+        ivec2 i = ivec2(floor(p));
+        vec2 f = p - vec2(i);
+        return mix(mix(fb_texel(i), fb_texel(i + ivec2(1, 0)), f.x),
+                   mix(fb_texel(i + ivec2(0, 1)), fb_texel(i + ivec2(1, 1)), f.x), f.y);
+    }
+    float m = max(length(dFdx(p)), length(dFdy(p))) * float(u_fbScale);
+    return textureLod(u_tex, uv, m > 1.01 ? log2(float(u_fbScale)) : 0.0);
+}
 
 bool cmp(int f, int a, int b) {
     if (f == 0) return false;
@@ -139,7 +192,7 @@ void main() {
     vec4 c = v_col0;
     if (u_clear == 0 && u_texOn == 1) {
         vec2 uv = u_texFlipY == 1 ? vec2(v_uv.x, 1.0 - v_uv.y) : v_uv;
-        vec4 t = texture(u_tex, uv);
+        vec4 t = u_texFb == 1 ? sample_fb(uv) : texture(u_tex, uv);
         vec3 rgb;
         float a = c.a;
         if (u_texFunc == 0) { rgb = c.rgb * t.rgb; if (u_texRGBA == 1) a = c.a * t.a; }
@@ -157,7 +210,44 @@ void main() {
         if (!cmp(u_alphaFunc, ia & u_alphaMask, u_alphaRef & u_alphaMask)) discard;
     }
     if (u_clear == 0 && u_fog == 1) c.rgb = mix(u_fogColor, c.rgb, v_fog);
-    o_color = c;
+    o_color = vec4(c.rgb * u_srcMul, c.a);
+}
+)";
+
+// Reinterpretación de un framebuffer al cambiar de formato con el mismo ancho en bytes (como en la VRAM):
+// dos píxeles de 16 bits forman uno de 32 (bytes R G | B A) y al revés. Trabaja a la resolución escalada.
+const char *REFMT_VS = R"(#version 330 core
+void main() {
+    vec2 p = vec2((gl_VertexID & 1) * 4 - 1, (gl_VertexID & 2) * 2 - 1);
+    gl_Position = vec4(p, 0.0, 1.0);
+}
+)";
+
+const char *REFMT_FS = "#version 330 core\n" RAW16_GLSL R"(
+uniform sampler2D u_src;
+uniform int u_srcFmt, u_dstFmt, u_scale;
+out vec4 o_color;
+
+vec4 from16(uint r, int fmt) {
+    if (fmt == 0) return vec4(float(r & 31u) / 31.0, float(r >> 5 & 63u) / 63.0, float(r >> 11) / 31.0, 1.0);
+    if (fmt == 1) return vec4(vec3(r & 31u, r >> 5 & 31u, r >> 10 & 31u) / 31.0, float(r >> 15));
+    return vec4(r & 15u, r >> 4 & 15u, r >> 8 & 15u, r >> 12) / 15.0;
+}
+
+void main() {
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    int x = p.x / u_scale, sub = p.x % u_scale;
+    if (u_dstFmt == 3 && u_srcFmt != 3) {
+        uint lo = raw16(texelFetch(u_src, ivec2(2 * x * u_scale + sub, p.y), 0), u_srcFmt);
+        uint hi = raw16(texelFetch(u_src, ivec2((2 * x + 1) * u_scale + sub, p.y), 0), u_srcFmt);
+        o_color = vec4(lo & 255u, lo >> 8, hi & 255u, hi >> 8) / 255.0;
+    } else if (u_srcFmt == 3 && u_dstFmt != 3) {
+        uvec4 v = uvec4(texelFetch(u_src, ivec2(x / 2 * u_scale + sub, p.y), 0) * 255.0 + 0.5);
+        o_color = from16((x & 1) == 0 ? v.r | v.g << 8 : v.b | v.a << 8, u_dstFmt);
+    } else {
+        vec4 c = texelFetch(u_src, p, 0);
+        o_color = u_srcFmt == u_dstFmt ? c : from16(raw16(c, u_srcFmt), u_dstFmt);
+    }
 }
 )";
 
@@ -167,8 +257,11 @@ struct Snap {
     float world[12], view[12], proj[16];
     GLuint tex = 0;
     float tex_w = 1, tex_h = 1;
-    bool tex_flip = false;
     bool tex_hd = false;
+    // Framebuffer como textura: se resuelve al ejecutar (su formato y su textura de GL pueden cambiar).
+    int tex_fb = 0;           // 0 = no, 1 = color, 2 = profundidad
+    uint32_t tex_fb_addr = 0;  // dirección del framebuffer o del búfer de profundidad
+    GLuint clut = 0;          // CLUT para leer el framebuffer como CLUT16/CLUT32
 
     uint32_t arg(int c) const { return cmd[c] & 0xFFFFFF; }
     bool through() const { return cmd[0x12] >> 23 & 1; }
@@ -202,9 +295,15 @@ struct Frame {
 
 struct Target {
     uint32_t addr = 0;
-    int w = 480, h = 272;
+    int w = 480, h = 272;      // en píxeles de la PSP; w = stride
+    int fmt = 3, stride = 512;  // formato (0-2 = 16 bits, 3 = 8888) y stride con los que se dibujó por última vez
+    uint32_t zaddr = 0;        // búfer de profundidad usado en el último dibujo
     GLuint fbo = 0, color = 0, depth = 0;
+    int depth_w = 0;           // ancho de la textura de profundidad (píxeles de la PSP)
+    GLuint views[2] = {};      // texturas de color para 16 y 32 bits (se alterna al cambiar de formato)
+    int view_w[2] = {};
     bool cpu_written = false;  // la CPU/DMA lo ha sobrescrito desde el último dibujo de la GE (vídeos)
+    bool mips_dirty = true;    // mipmaps de la vista de color desactualizados
 };
 
 struct CachedTex {
@@ -218,6 +317,13 @@ RendererConfig g_cfg;
 GLuint g_prog = 0, g_vao = 0, g_vbo = 0;
 std::unordered_map<std::string, GLint> g_loc;
 std::unordered_map<uint32_t, Target> g_targets;
+std::unordered_map<uint32_t, uint32_t> g_depth_owner;  // búfer de profundidad -> último framebuffer que lo usó
+struct ClutTex { GLuint tex = 0; uint64_t used = 0; };
+std::unordered_map<uint64_t, ClutTex> g_cluts;         // CLUT convertida a RGBA, por contenido
+uint64_t g_frame_no = 0;
+GLuint g_refmt_prog = 0, g_refmt_vao = 0, g_copy_fbo = 0;
+struct Scratch { GLuint tex = 0; int w = 0, h = 0; };
+Scratch g_scratch;  // copia de un framebuffer que se usa como textura de sí mismo
 std::unordered_map<uint64_t, CachedTex> g_textures;
 Target *g_presented = nullptr;
 float g_max_aniso = 0;
@@ -274,34 +380,141 @@ void mat43_to_44(const float *m, float *o) {
     }
 }
 
-Target &target_for(uint32_t addr, uint32_t stride, uint32_t scissor_br) {
+GLuint new_texture(GLint ifmt, int w, int h, GLenum fmt, GLenum type) {
+    GLuint tex;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, ifmt, w, h, 0, fmt, type, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    return tex;
+}
+
+int stride_width(uint32_t stride) { return std::clamp<int>(stride, 16, 1024); }
+
+// Asocia al FBO la textura de color de la vista (16 o 32 bits) y, si hace falta, una profundidad más ancha.
+// En GL 3.3 los adjuntos pueden tener tamaños distintos: se dibuja en la intersección.
+void attach_view(Target &t, int view, bool clear) {
+    int S = g_cfg.scale;
+    if (!t.views[view] || t.view_w[view] != t.w) {
+        if (t.views[view]) glDeleteTextures(1, &t.views[view]);
+        t.views[view] = new_texture(GL_RGBA8, t.w * S, t.h * S, GL_RGBA, GL_UNSIGNED_BYTE);
+        t.view_w[view] = t.w;
+        clear = true;
+    }
+    t.color = t.views[view];
+    glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.color, 0);
+    bool new_depth = t.depth_w < t.w;
+    if (new_depth) {
+        // Profundidad como textura: el juego la lee (0x04600000 + dirección) para la profundidad de campo.
+        if (t.depth) glDeleteTextures(1, &t.depth);
+        t.depth = new_texture(GL_DEPTH24_STENCIL8, t.w * S, t.h * S, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        t.depth_w = t.w;
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_TEXTURE_2D, t.depth, 0);
+    }
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) fatal("FBO incompleto");
+    if (clear || new_depth) {
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(1, 1, 1, 1);
+        glDepthMask(GL_TRUE);
+        glStencilMask(0xFF);
+        glClearColor(0, 0, 0, 0);
+        glClearDepth(0);
+        glClearStencil(0);
+        glClear((clear ? GL_COLOR_BUFFER_BIT : 0) | (new_depth ? GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT : 0));
+    }
+}
+
+Target &target_for(uint32_t addr, uint32_t stride, uint32_t scissor_br, int fmt) {
     Target &t = g_targets[addr];
     if (t.fbo) return t;
     t.addr = addr;
     int sy2 = (scissor_br >> 10 & 0x3FF) + 1;
-    t.w = stride >= 480 ? 480 : std::max<int>(stride, 16);
-    t.h = t.w == 480 ? 272 : std::min(std::max(sy2, 16), 512);
-    int S = g_cfg.scale;
-    glGenTextures(1, &t.color);
-    glBindTexture(GL_TEXTURE_2D, t.color);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, t.w * S, t.h * S, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glGenRenderbuffers(1, &t.depth);
-    glBindRenderbuffer(GL_RENDERBUFFER, t.depth);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, t.w * S, t.h * S);
+    t.fmt = fmt;
+    t.stride = stride;
+    t.w = stride_width(stride);
+    t.h = stride >= 480 ? 272 : std::min(std::max(sy2, 16), 512);
     glGenFramebuffers(1, &t.fbo);
-    glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
-    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, t.color, 0);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, t.depth);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) fatal("FBO incompleto");
-    glClearColor(0, 0, 0, 0);
-    glClearDepth(0);
-    glClearStencil(0);
-    glStencilMask(0xFF);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
-    LOGI("gpu", "framebuffer %06x: %dx%d (interno %dx%d)", addr, t.w, t.h, t.w * S, t.h * S);
+    attach_view(t, fmt == 3, true);
+    LOGI("gpu", "framebuffer %06x: %dx%d fmt %d (interno %dx%d)", addr, t.w, t.h, fmt, t.w * g_cfg.scale,
+         t.h * g_cfg.scale);
     return t;
+}
+
+// El juego dibuja en la misma dirección con otro formato o stride. Si el ancho en bytes coincide (p. ej.
+// 512 píxeles de 16 bits = 256 de 32), los bytes de la VRAM son los mismos y se reinterpretan: la
+// profundidad de campo escribe así en 16 bits lo que luego es el alfa de una imagen de 32.
+void reformat_target(Target &t, int fmt, uint32_t stride) {
+    bool was32 = t.fmt == 3, is32 = fmt == 3;
+    bool keep = (uint32_t)t.stride * (was32 ? 4 : 2) == stride * (is32 ? 4 : 2);
+    GLuint src = t.color;
+    int old_fmt = t.fmt;
+    t.fmt = fmt;
+    t.stride = stride;
+    t.w = stride_width(stride);
+    // Mismo tamaño de píxel (565 <-> 5551/4444, casi inexistente): se conservan los colores tal cual.
+    if (keep && was32 == is32) return;
+    attach_view(t, is32, !keep);
+    if (!keep) return;
+    int S = g_cfg.scale;
+    glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
+    glViewport(0, 0, t.w * S, t.h * S);
+    glDisable(GL_SCISSOR_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glColorMask(1, 1, 1, 1);
+    glUseProgram(g_refmt_prog);
+    glBindVertexArray(g_refmt_vao);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, src);
+    glUniform1i(glGetUniformLocation(g_refmt_prog, "u_srcFmt"), old_fmt);
+    glUniform1i(glGetUniformLocation(g_refmt_prog, "u_dstFmt"), fmt);
+    glUniform1i(glGetUniformLocation(g_refmt_prog, "u_scale"), S);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glUseProgram(g_prog);
+    glBindVertexArray(g_vao);
+}
+
+// Copia de un framebuffer para usarlo como textura mientras se dibuja en él (el desenfoque de la
+// profundidad de campo suma desplazada su propia imagen); en GL leer y escribir a la vez no está definido.
+GLuint self_copy(const Target &t) {
+    int S = g_cfg.scale, w = t.w * S, h = t.h * S;
+    if (g_scratch.w != w || g_scratch.h != h) {
+        if (g_scratch.tex) glDeleteTextures(1, &g_scratch.tex);
+        g_scratch.tex = new_texture(GL_RGBA8, w, h, GL_RGBA, GL_UNSIGNED_BYTE);
+        g_scratch.w = w;
+        g_scratch.h = h;
+        glBindFramebuffer(GL_FRAMEBUFFER, g_copy_fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, g_scratch.tex, 0);
+    }
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, t.fbo);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_copy_fbo);
+    glBlitFramebuffer(0, 0, w, h, 0, 0, w, h, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    return g_scratch.tex;
+}
+
+// CLUT del dibujo convertida a RGBA (512 entradas, el máximo índice tras desplazamiento, máscara e inicio).
+GLuint clut_texture(const uint8_t *clut, uint32_t clutfmt) {
+    uint64_t h = 1469598103934665603ULL ^ (clutfmt & 3);
+    for (int i = 0; i < 2048; i++) h = (h ^ clut[i]) * 1099511628211ULL;
+    ClutTex &c = g_cluts[h];
+    c.used = g_frame_no;
+    if (c.tex) return c.tex;
+    uint8_t rgba[512 * 4];
+    for (uint32_t i = 0; i < 512; i++) clut_color(clut, (clutfmt & 3) | 0xFF00 | (i >> 4 & 0x1F) << 16, i & 0xFF, rgba + i * 4);
+    c.tex = new_texture(GL_RGBA8, 512, 1, GL_RGBA, GL_UNSIGNED_BYTE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 512, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    return c.tex;
 }
 
 GLenum blend_factor(int f, bool src, GLenum fix) {
@@ -333,14 +546,16 @@ void resolve_texture(Snap &s) {
     p.swizzled = g_ge.arg(0xC2) & 1;
     p.clutfmt = g_ge.arg(0xC5);
     if (p.format > 10) p.format = 3;
-    // ¿render-to-texture? (la textura es un framebuffer que hemos dibujado)
+    // ¿Render a textura? La textura es un framebuffer que hemos dibujado o, en los espejos 0x04200000 y
+    // 0x04600000 de la VRAM, el búfer de profundidad. Se resuelve al ejecutar el dibujo.
     if ((p.addr & 0x0F000000) == 0x04000000) {
-        auto it = g_targets.find(p.addr & 0x1FFFF0);
-        if (it != g_targets.end()) {
-            s.tex = it->second.color;
-            s.tex_flip = true;
-            s.tex_w = (float)it->second.w;
-            s.tex_h = (float)it->second.h;
+        uint32_t off = p.addr & 0x1FFFF0;
+        bool depth = (p.addr & 0x00200000) && g_depth_owner.count(off);
+        if (depth || g_targets.count(off)) {
+            s.tex_fb = depth ? 2 : 1;
+            s.tex_fb_addr = off;
+            s.tex = 0;
+            s.clut = p.format == 6 || p.format == 7 ? clut_texture(g_ge.clut, p.clutfmt) : 0;
             return;
         }
     }
@@ -380,7 +595,6 @@ void resolve_texture(Snap &s) {
     }
     s.tex = ct.tex;
     s.tex_hd = ct.replaced;
-    s.tex_flip = false;
     s.tex_w = (float)p.w;
     s.tex_h = (float)p.h;
 }
@@ -434,8 +648,56 @@ void set_light_uniforms(const Snap &g) {
 // Ejecuta un dibujo; las matrices pueden venir interpoladas (si no, las de la instantánea).
 void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const float *world, const float *view,
              const float *proj) {
-    Target &t = target_for(g.fb_addr(), g.cmd[0x9D] & 0x7FF, g.arg(0xD5));
+    int fmt = g.arg(0xD2) & 3;
+    uint32_t stride = g.cmd[0x9D] & 0x7FF;
+    Target &t = target_for(g.fb_addr(), stride, g.arg(0xD5), fmt);
+    if (t.fmt != fmt || t.stride != (int)stride) reformat_target(t, fmt, stride);
     t.cpu_written = false;
+    bool clear = g.arg(0xD3) & 1;
+    bool self_read = false;
+    t.zaddr = g.arg(0x9E) & 0x1FFFF0;
+    if ((g.arg(0x23) & 1) || (clear && (g.arg(0xD3) >> 10 & 1))) g_depth_owner[t.zaddr] = t.addr;
+
+    // Framebuffer (o su profundidad) como textura
+    GLuint fb_tex = 0;
+    float fb_w = 1, fb_h = 1;
+    int clut_mode = 0, src_fmt = 3;
+    if (g.tex_fb && !clear) {
+        uint32_t a = g.tex_fb_addr;
+        if (g.tex_fb == 2) {
+            auto o = g_depth_owner.find(a);
+            a = o != g_depth_owner.end() ? o->second : ~0u;
+        }
+        auto it = g_targets.find(a);
+        if (it != g_targets.end()) {
+            const Target &src = it->second;
+            int tf = g.arg(0xC3) & 0xF;
+            src_fmt = src.fmt;
+            if (g.tex_fb == 2) {
+                fb_tex = src.depth;
+                fb_w = (float)src.depth_w;
+                if (tf == 6 && g.clut) clut_mode = 2;
+            } else {
+                self_read = &src == &t;
+                fb_tex = self_read ? self_copy(t) : src.color;
+                // Mipmaps hasta la resolución de la PSP, para las reducciones
+                if (!self_read && !clut_mode && g_cfg.scale > 1 && it->second.mips_dirty) {
+                    int levels = 0;
+                    while ((1 << levels) < g_cfg.scale) levels++;
+                    glBindTexture(GL_TEXTURE_2D, fb_tex);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, levels);
+                    glGenerateMipmap(GL_TEXTURE_2D);
+                    it->second.mips_dirty = false;
+                }
+                fb_w = (float)src.w;
+                if (tf == 6 && g.clut && src.fmt != 3) clut_mode = 1;
+                if (tf == 7 && g.clut && src.fmt == 3) clut_mode = 3;
+            }
+            fb_h = (float)src.h;
+        }
+    }
+
+    t.mips_dirty = true;
     int S = g_cfg.scale;
     glBindFramebuffer(GL_FRAMEBUFFER, t.fbo);
     glViewport(0, 0, t.w * S, t.h * S);
@@ -448,7 +710,6 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
     glScissor(x1 * S, (t.h - (y2 + 1)) * S, std::max(0, x2 - x1 + 1) * S, std::max(0, y2 - y1 + 1) * S);
 
     bool through = g.through();
-    bool clear = g.arg(0xD3) & 1;
     glUniform1i(U("u_through"), through);
     glUniform1i(U("u_clear"), clear);
     glUniform2f(U("u_fbSize"), (float)t.w, (float)t.h);
@@ -475,6 +736,7 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
         glUniform1i(U("u_texOn"), 0);
         glUniform1i(U("u_lighting"), 0);
         glUniform1i(U("u_fog"), 0);
+        glUniform3f(U("u_srcMul"), 1.f, 1.f, 1.f);
     } else {
         if (g.arg(0x23) & 1) {
             static const GLenum F[8] = {GL_NEVER, GL_ALWAYS, GL_EQUAL, GL_NOTEQUAL, GL_LESS, GL_LEQUAL, GL_GREATER, GL_GEQUAL};
@@ -484,8 +746,12 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
             glDisable(GL_DEPTH_TEST);
         }
         glDepthMask(!(g.arg(0xE7) & 1) && (g.arg(0x23) & 1));
-        uint32_t cm = g.arg(0xE8);
-        glColorMask(!(cm & 0xFF), !(cm >> 8 & 0xFF), !(cm >> 16 & 0xFF), !(g.arg(0xE9) & 0xFF));
+        // En la PSP el alfa del framebuffer es el stencil: solo cambia si el test de stencil lo modifica (como en
+        // PPSSPP). La profundidad de campo escribe una máscara en el alfa y luego dibuja el color sin tocarla.
+        uint32_t cm = g.arg(0xE8), so = g.arg(0xDD);
+        bool alpha_out = (g.arg(0x24) & 1) && (g.arg(0xE9) & 0xFF) != 0xFF && fmt != 0 &&
+                         ((so & 7) || (so >> 8 & 7) || (so >> 16 & 7));
+        glColorMask(!(cm & 0xFF), !(cm >> 8 & 0xFF), !(cm >> 16 & 0xFF), alpha_out);
 
         // Stencil (p. ej. el minimapa circular: se marca el círculo y el mapa solo se pinta dentro).
         if (g.arg(0x24) & 1) {
@@ -500,10 +766,21 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
             glDisable(GL_STENCIL_TEST);
         }
 
+        glUniform3f(U("u_srcMul"), 1.f, 1.f, 1.f);
         if (g.arg(0x21) & 1) {
             uint32_t b = g.arg(0xDF);
             GLenum fa = fix_factor(g.arg(0xE0)), fb = fix_factor(g.arg(0xE1));
-            uint32_t fixc = fa == GL_CONSTANT_COLOR ? g.arg(0xE0) : g.arg(0xE1);
+            bool fix_a = (b & 0xF) >= 10, fix_b = (b >> 4 & 0xF) >= 10;
+            if (fix_a && fix_b && fa == GL_CONSTANT_COLOR && fb == GL_CONSTANT_COLOR) {
+                // GL solo tiene un color de mezcla: el de la fuente se aplica en el shader (como PPSSPP).
+                // El desenfoque de la profundidad de campo mezcla 0xDD * fuente + 0x22 * destino; con un
+                // único color (0xDD a los dos) se saturaba a blanco y velaba toda la imagen.
+                float m[3];
+                g.color(0xE0, m);
+                glUniform3fv(U("u_srcMul"), 1, m);
+                fa = GL_ONE;
+            }
+            uint32_t fixc = fb == GL_CONSTANT_COLOR ? g.arg(0xE1) : g.arg(0xE0);
             glBlendColor((fixc & 0xFF) / 255.f, (fixc >> 8 & 0xFF) / 255.f, (fixc >> 16 & 0xFF) / 255.f, 1.f);
             glEnable(GL_BLEND);
             glBlendFuncSeparate(blend_factor(b & 0xF, true, fa), blend_factor(b >> 4 & 0xF, false, fb), GL_ONE, GL_ZERO);
@@ -534,21 +811,48 @@ void execute(const Snap &g, GpuPrim prim, const GpuVertex *v, int count, const f
         glUniform4f(U("u_uvScaleOff"), g.f24(0x48), g.f24(0x49), g.f24(0x4A), g.f24(0x4B));
         set_light_uniforms(g);
 
-        bool tex_on = (g.arg(0x1E) & 1) && g.tex;
+        bool tex_on = (g.arg(0x1E) & 1) && (g.tex || fb_tex);
         glUniform1i(U("u_texOn"), tex_on);
-        if (tex_on) {
+        glUniform2f(U("u_uvFix"), 1.f, 1.f);
+        glUniform1i(U("u_texClut"), 0);
+        glUniform1i(U("u_texFb"), 0);
+        if (tex_on && fb_tex) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(GL_TEXTURE_2D, fb_tex);
+            bool linear = (g.arg(0xC6) >> 8 & 1) || (g.arg(0xC6) & 1);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, linear ? GL_LINEAR_MIPMAP_NEAREST : GL_NEAREST_MIPMAP_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+            glUniform1i(U("u_texFb"), 1);
+            glUniform1i(U("u_fbScale"), S);
+            glUniform1i(U("u_fbLinear"), linear);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            glUniform1i(U("u_texFlipY"), 1);
+            glUniform2f(U("u_texSize"), fb_w, fb_h);
+            // Fuera del modo through las UV van normalizadas al tamaño de la textura de la PSP (potencia de 2)
+            glUniform2f(U("u_uvFix"), (1 << (g.arg(0xB8) & 0xF)) / fb_w, (1 << (g.arg(0xB8) >> 8 & 0xF)) / fb_h);
+            if (clut_mode) {
+                uint32_t cf = g.arg(0xC5);
+                glUniform1i(U("u_texClut"), clut_mode);
+                glUniform1i(U("u_srcFmt"), src_fmt);
+                glUniform3i(U("u_clutIdx"), cf >> 2 & 0x1F, cf >> 8 & 0xFF, (cf >> 16 & 0x1F) << 4);
+                glActiveTexture(GL_TEXTURE1);
+                glBindTexture(GL_TEXTURE_2D, g.clut);
+                glActiveTexture(GL_TEXTURE0);
+            }
+        } else if (tex_on) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(GL_TEXTURE_2D, g.tex);
-            if (!g.tex_flip) {
-                bool linear = (g.arg(0xC6) >> 8 & 1) || g.tex_hd;
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
-                                g.tex_hd ? GL_LINEAR_MIPMAP_LINEAR : linear ? GL_LINEAR : GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (g.arg(0xC7) & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (g.arg(0xC7) >> 8 & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
-            }
-            glUniform1i(U("u_texFlipY"), g.tex_flip);
+            bool linear = (g.arg(0xC6) >> 8 & 1) || g.tex_hd;
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                            g.tex_hd ? GL_LINEAR_MIPMAP_LINEAR : linear ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, linear ? GL_LINEAR : GL_NEAREST);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, (g.arg(0xC7) & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, (g.arg(0xC7) >> 8 & 1) ? GL_CLAMP_TO_EDGE : GL_REPEAT);
+            glUniform1i(U("u_texFlipY"), 0);
             glUniform2f(U("u_texSize"), g.tex_w, g.tex_h);
+        }
+        if (tex_on) {
             uint32_t tf = g.arg(0xC9);
             glUniform1i(U("u_texFunc"), tf & 7);
             glUniform1i(U("u_texRGBA"), tf >> 8 & 1);
@@ -624,8 +928,8 @@ void blit_to_window(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
         // La GE ha dibujado ahí: se usa su FBO aunque no se redibuje cada vblank (cargas).
         g_presented = &it->second;
         src_fbo = it->second.fbo;
-        sw = it->second.w * g_cfg.scale;
-        sh = it->second.h * g_cfg.scale;
+        sw = std::min(it->second.w, 480) * g_cfg.scale;
+        sh = std::min(it->second.h, 272) * g_cfg.scale;
     } else if (fb_addr) {
         // Framebuffer escrito por la CPU (vídeos): se sube tal cual.
         g_presented = nullptr;
@@ -676,17 +980,68 @@ bool camera_cut(const float *a, const float *b) {
     return dt > 400.f || dr > 0.5f;
 }
 
-void render_interpolated(float t) {
-    // dibujos del fotograma anterior por clave y ocurrencia
+// ¿Algún vértice se mueve más de un 10 % del tamaño de la malla entre dos fotogramas? Con giros pequeños
+// (hasta ~13° en una rueda) la interpolación lineal apenas encoge la malla.
+bool large_deformation(const std::vector<GpuVertex> &a, const std::vector<GpuVertex> &b) {
+    float lo[3] = {1e30f, 1e30f, 1e30f}, hi[3] = {-1e30f, -1e30f, -1e30f}, move = 0;
+    for (size_t i = 0; i < b.size(); i++) {
+        float d = 0;
+        for (int k = 0; k < 3; k++) {
+            lo[k] = std::min(lo[k], b[i].pos[k]);
+            hi[k] = std::max(hi[k], b[i].pos[k]);
+            d += (a[i].pos[k] - b[i].pos[k]) * (a[i].pos[k] - b[i].pos[k]);
+        }
+        move = std::max(move, d);
+    }
+    float size = 0;
+    for (int k = 0; k < 3; k++) size += (hi[k] - lo[k]) * (hi[k] - lo[k]);
+    return move > 0.01f * size;
+}
+
+// Emparejamiento de los dibujos del último fotograma con los del anterior (se calcula una vez por fotograma
+// lógico). Entre los de la misma clave (misma malla y textura: p. ej. cada mata de vegetación) se elige el
+// más cercano por la posición de su matriz de mundo: el juego puede ordenarlos distinto en cada fotograma
+// y, emparejados por orden, se interpolaba entre ejemplares distintos (parpadeos a medio camino).
+std::vector<const DrawCmd *> g_match;
+bool g_match_valid = false;
+
+void match_draws() {
     std::unordered_map<uint64_t, std::vector<const DrawCmd *>> prev;
     for (const DrawCmd &d : g_prev.cmds) prev[d.key].push_back(&d);
-    std::unordered_map<uint64_t, size_t> seen;
-    float world[12], view[12], proj[16];
-    for (const DrawCmd &d : g_last.cmds) {
-        const DrawCmd *p = nullptr;
+    std::unordered_map<uint64_t, std::vector<bool>> used;
+    g_match.assign(g_last.cmds.size(), nullptr);
+    for (size_t i = 0; i < g_last.cmds.size(); i++) {
+        const DrawCmd &d = g_last.cmds[i];
         auto it = prev.find(d.key);
-        size_t occ = seen[d.key]++;
-        if (it != prev.end() && occ < it->second.size()) p = it->second[occ];
+        if (it == prev.end()) continue;
+        std::vector<bool> &u = used[d.key];
+        u.resize(it->second.size());
+        int best = -1;
+        float best_d = 0;
+        for (size_t k = 0; k < it->second.size(); k++) {
+            if (u[k]) continue;
+            const float *a = it->second[k]->snap.world, *b = d.snap.world;
+            float dist = (a[9] - b[9]) * (a[9] - b[9]) + (a[10] - b[10]) * (a[10] - b[10]) + (a[11] - b[11]) * (a[11] - b[11]);
+            if (best < 0 || dist < best_d) {
+                best = (int)k;
+                best_d = dist;
+                if (dist == 0) break;
+            }
+        }
+        if (best >= 0) {
+            u[best] = true;
+            g_match[i] = it->second[best];
+        }
+    }
+    g_match_valid = true;
+}
+
+void render_interpolated(float t) {
+    if (!g_match_valid) match_draws();
+    float world[12], view[12], proj[16];
+    for (size_t i = 0; i < g_last.cmds.size(); i++) {
+        const DrawCmd &d = g_last.cmds[i];
+        const DrawCmd *p = g_match[i];
         if (!p || d.snap.through() || t >= 1.f || camera_cut(p->snap.view, d.snap.view)) {
             execute(d);
             continue;
@@ -699,6 +1054,12 @@ void render_interpolated(float t) {
         const GpuVertex *verts = d.verts.data();
         if (p->verts.size() == d.verts.size()) {  // mallas deformadas (skinning en CPU): se interpolan vértices
             bool differ = memcmp(p->verts.data(), d.verts.data(), d.verts.size() * sizeof(GpuVertex)) != 0;
+            if (differ && large_deformation(p->verts, d.verts)) {
+                // Una rueda gira decenas de grados por fotograma lógico: interpolar en línea recta acerca sus
+                // vértices al eje (se encoge, se descentra y parece transparente). Se dibuja sin interpolar
+                // la deformación; la matriz de mundo sí se interpola y la rueda sigue al coche.
+                differ = false;
+            }
             if (differ) {
                 g_lerp_verts = d.verts;
                 for (size_t i = 0; i < d.verts.size(); i++)
@@ -736,6 +1097,16 @@ bool renderer_init(const RendererConfig &cfg) {
     }
     glUseProgram(g_prog);
     glUniform1i(U("u_tex"), 0);
+    glUniform1i(U("u_clut"), 1);
+    g_refmt_prog = glCreateProgram();
+    glAttachShader(g_refmt_prog, compile(GL_VERTEX_SHADER, REFMT_VS));
+    glAttachShader(g_refmt_prog, compile(GL_FRAGMENT_SHADER, REFMT_FS));
+    glLinkProgram(g_refmt_prog);
+    glGetProgramiv(g_refmt_prog, GL_LINK_STATUS, &ok);
+    if (!ok) fatal("error enlazando el shader de reinterpretación");
+    glGenVertexArrays(1, &g_refmt_vao);
+    glGenFramebuffers(1, &g_copy_fbo);
+    glUseProgram(g_prog);
     glGenVertexArrays(1, &g_vao);
     glBindVertexArray(g_vao);
     glGenBuffers(1, &g_vbo);
@@ -785,6 +1156,10 @@ static void dump_draw(GpuPrim prim, const GpuVertex *v, int count) {
          A(0x21) & 1, A(0xDF), A(0xE0), A(0xE1), A(0x22) & 1, A(0xDB), A(0x24) & 1, A(0xDC), A(0xDD),
          A(0x23) & 1, A(0xDE) & 7, A(0xE7) & 1, A(0xE8), A(0xE9) & 0xFF, A(0x25) & 1);
     if (count > 12) return;
+    LOGI("gedump", "    stride=%u zbuf=%06x clutfmt=%06x clut[0..7]=%08x %08x %08x %08x %08x %08x %08x %08x",
+         A(0x9D) & 0x7FF, A(0x9E) & 0xFFFFF0, A(0xC5), ((uint32_t *)g_ge.clut)[0], ((uint32_t *)g_ge.clut)[1],
+         ((uint32_t *)g_ge.clut)[2], ((uint32_t *)g_ge.clut)[3], ((uint32_t *)g_ge.clut)[4],
+         ((uint32_t *)g_ge.clut)[5], ((uint32_t *)g_ge.clut)[6], ((uint32_t *)g_ge.clut)[7]);
     if (const char *dir = getenv("CARS_GE_DUMP_DIR"); dir && (A(0x1E) & 1)) {  // textura tal y como se usa
         TexParams p{g_ge.tex_addr(0), g_ge.tex_bufw(0), g_ge.tex_w(0), g_ge.tex_h(0), (int)(A(0xC3) & 0xF),
                     (A(0xC2) & 1) != 0, A(0xC5)};
@@ -833,7 +1208,7 @@ void renderer_draw(GpuPrim prim, const GpuVertex *v, int count, uint64_t match_k
     // La GE vuelve a dibujar en este framebuffer: deja de mostrarse desde memoria. Hay que hacerlo al
     // grabar, no al ejecutar: con interpolación los dibujos solo se ejecutan si se presenta el FBO.
     // El FBO se crea ya al grabar: el presentador decide por su existencia si mostrar el FBO o la memoria.
-    target_for(g_ge.fb_addr(), g_ge.cmd[0x9D] & 0x7FF, g_ge.arg(0xD5)).cpu_written = false;
+    target_for(g_ge.fb_addr(), g_ge.cmd[0x9D] & 0x7FF, g_ge.arg(0xD5), g_ge.arg(0xD2) & 3).cpu_written = false;
     if (!g_cfg.interpolate) {
         execute(d.snap, prim, v, count, d.snap.world, d.snap.view, d.snap.proj);
         return;
@@ -857,9 +1232,42 @@ bool display_is_cpu(uint32_t fb_addr) {
     return it == g_targets.end() || it->second.cpu_written;
 }
 
+// Con CARS_GE_DUMP_DIR, al terminar el volcado se guardan también los framebuffers (RGBA, a escala 1).
+static void dump_targets() {
+    const char *dir = getenv("CARS_GE_DUMP_DIR");
+    if (!dir) return;
+    int S = g_cfg.scale;
+    for (auto &[addr, t] : g_targets) {
+        std::vector<uint8_t> px((size_t)t.w * S * t.h * S * 4), out((size_t)t.w * t.h * 4);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, t.fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, t.w * S, t.h * S, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        for (int y = 0; y < t.h; y++)
+            for (int x = 0; x < t.w; x++)
+                memcpy(&out[((size_t)y * t.w + x) * 4], &px[((size_t)(t.h - 1 - y) * S * t.w * S + x * S) * 4], 4);
+        char path[512];
+        snprintf(path, sizeof(path), "%s/fb_%06x_fmt%d.png", dir, addr, t.fmt);
+        texrep_write_png(path, out.data(), t.w, t.h);
+    }
+}
+
 void renderer_flip(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
-    if (g_dump_state == 1) g_dump_state = 2;
+    if (g_dump_state == 1) {
+        g_dump_state = 2;
+        if (!g_cfg.interpolate) dump_targets();
+    }
     if (g_dump_state == 0 && time_us() / 1e6 >= g_dump_at) g_dump_state = 1;
+    // CLUTs de framebuffers que ya no se usan (las de los fotogramas grabados siguen vivas)
+    if (++g_frame_no % 300 == 0) {
+        for (auto it = g_cluts.begin(); it != g_cluts.end();) {
+            if (g_frame_no - it->second.used > 60) {
+                glDeleteTextures(1, &it->second.tex);
+                it = g_cluts.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
     if (!g_cfg.interpolate) return;
     if (g_recording.cmds.empty() && g_have_last) {  // flip sin dibujos nuevos: se mantiene el fotograma
         g_last.display = fb_addr;
@@ -876,6 +1284,7 @@ void renderer_flip(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
     }
     g_last = std::move(g_recording);
     g_have_last = true;
+    g_match_valid = false;
     g_recording = Frame();
 }
 
@@ -916,6 +1325,10 @@ bool renderer_present(uint32_t fb_addr, uint32_t stride, uint32_t fmt) {
         render_interpolated(t);
     } else {
         for (const DrawCmd &d : g_last.cmds) execute(d);
+    }
+    if (g_dump_state == 2) {
+        g_dump_state = 3;
+        dump_targets();
     }
     blit_to_window(g_last.display, g_last.stride, g_last.fmt);
     count_stats(false);

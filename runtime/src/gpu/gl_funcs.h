@@ -60,6 +60,7 @@
     X(PFNGLUNIFORM1IPROC, glUniform1i)                                                     \
     X(PFNGLUNIFORM1FPROC, glUniform1f)                                                     \
     X(PFNGLUNIFORM2FPROC, glUniform2f)                                                     \
+    X(PFNGLUNIFORM3IPROC, glUniform3i)                                                     \
     X(PFNGLUNIFORM3FPROC, glUniform3f)                                                     \
     X(PFNGLUNIFORM4FPROC, glUniform4f)                                                     \
     X(PFNGLUNIFORM3FVPROC, glUniform3fv)                                                   \

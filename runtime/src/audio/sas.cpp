@@ -253,7 +253,7 @@ Voice *voice(Ctx *c) {
     int v = (int)A1;
     return v >= 0 && v < VOICES ? &g_sas.voices[v] : nullptr;
 }
-constexpr uint32_t ERR_VOICE = 0x80420010;
+constexpr uint32_t ERR_VOICE = 0x80420010, ERR_VOICE_PAUSED = 0x80420016;
 
 }  // namespace
 
@@ -315,16 +315,21 @@ HLE(__sceSasSetPitch) {
     v->pitch = std::clamp((int)A2, 0, 0x4000);
     RET(0);
 }
+// Como en la PSP (y PPSSPP): KeyOn sobre una voz que sigue sonando no la reinicia, y KeyOff sobre una ya
+// apagada no hace nada. El juego repite KeyOn de los bucles (roce contra la pared, chirrido de ruedas)
+// mientras duran: reiniciarlos cada vez cortaba el sonido y se oía un tartamudeo que no es del juego.
 HLE(__sceSasSetKeyOn) {
     Voice *v = voice(c);
     if (!v) RET(ERR_VOICE);
-    if (!v->paused) v->key_on();
+    if (v->paused || v->on) RET(ERR_VOICE_PAUSED);
+    v->key_on();
     RET(0);
 }
 HLE(__sceSasSetKeyOff) {
     Voice *v = voice(c);
     if (!v) RET(ERR_VOICE);
-    if (v->playing && !v->paused) v->key_off();
+    if (v->paused || !v->on) RET(ERR_VOICE_PAUSED);
+    v->key_off();
     RET(0);
 }
 HLE(__sceSasSetNoise) { RET(0); }

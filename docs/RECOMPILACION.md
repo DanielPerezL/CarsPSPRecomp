@@ -27,7 +27,8 @@ sistema con el hilo que las hace. Pruebas sin ventana visible: `--hidden`, `--sc
 para simular pulsaciones (`reload` simula F5). `--check-sp` en el recompilador añade comprobaciones de `$sp`.
 Gráficos: `CARS_GE_DUMP=T` (con `-v`) registra el estado de la GE de cada dibujo del primer fotograma tras el
 segundo T (blend, test de alfa, stencil, texturas y, en los dibujos pequeños, vértices en coordenadas de
-pantalla); con `CARS_GE_DUMP_DIR=carpeta` guarda además cada textura tal y como se usa (con su paleta).
+pantalla); con `CARS_GE_DUMP_DIR=carpeta` guarda además cada textura tal y como se usa (con su paleta) y,
+al terminar, todos los framebuffers (`fb_<dirección>_fmt<n>.png`, con su alfa).
 
 ## Arquitectura
 
@@ -62,13 +63,27 @@ Decisiones del runtime:
 - **GE:** `FINISH+END` termina una lista, pero `SIGNAL+END` es una señal y la lista sigue. El juego
   depende de ello para saber que la GPU ha terminado (si no, su FrameWatchdog lo limita a ~7 fps).
 - **Interpolación:** cada dibujo se empareja con el del fotograma anterior por (origen de vértices,
-  formato, nº de vértices, textura, primitiva) + orden de aparición; se interpolan matrices y, en mallas
-  con skinning, vértices. El 2D y los cortes de cámara no se interpolan. Un fotograma lógico de latencia.
+  formato, nº de vértices, textura, primitiva) y, entre los de la misma clave (cada mata de vegetación, cada
+  coche igual), con el de matriz de mundo más cercana: el juego no siempre los dibuja en el mismo orden. Se
+  interpolan matrices y, en mallas con skinning, vértices, salvo si la deformación es grande (una rueda que
+  gira decenas de grados por fotograma se encogería hacia el eje). El 2D y los cortes de cámara no se
+  interpolan. Un fotograma lógico de latencia.
 - **Framebuffers escritos por la CPU** (vídeos vía DMA) se presentan desde memoria hasta que la GE vuelva
   a dibujar en ellos.
 - **Stencil:** en la PSP es el canal alfa del framebuffer; aquí se usa el stencil del FBO (test, operaciones,
   máscara de escritura de 0xE9 y borrado con el alfa en modo *clear*). El minimapa lo usa para recortarse
-  al círculo.
+  al círculo. Como el alfa *es* el stencil, solo se escribe cuando el test de stencil lo modifica (igual que
+  PPSSPP).
+- **Profundidad de campo:** en carrera el juego desenfoca lo lejano (y, con turbo, también los lados). Lee
+  el búfer de profundidad como textura de 16 bits por el espejo 0x04600000 de la VRAM y lo pasa por una
+  CLUT; desenfoca el resultado en búferes de 16 bits; escribe la máscara en 16 bits con el doble de ancho
+  para que acabe en el alfa de una imagen de 32 bits, y mezcla con ella la escena reducida y difuminada.
+  Para eso los framebuffers guardan su formato y stride: si cambian con el mismo ancho en bytes, los bytes
+  se reinterpretan en la GPU (dos píxeles de 16 bits = uno de 32). La profundidad es una textura; los
+  framebuffers leídos con CLUT16/CLUT32 reconstruyen el valor de 16/32 bits en el shader, y se filtran como
+  en la PSP (CLUT por píxel original y mipmap de la resolución original al reducir). La mezcla con dos
+  colores fijos distintos (0xDD fuente + 0x22 destino) aplica el de la fuente en el shader, porque GL solo
+  tiene un `glBlendColor`: usar el mismo para los dos saturaba el desenfoque a blanco y velaba la imagen.
 - **Texturas sustituidas en alta resolución:** mipmaps solo hasta la resolución original (la PSP no los usa
   aquí) y filtrado anisotrópico. Con la cadena completa, un quad muy estrecho (la barra de nitro) promediaba
   el alfa de zonas transparentes y aparecía como una franja semitransparente. F5 vuelve a leer la carpeta
@@ -82,6 +97,8 @@ Decisiones del runtime:
   sobre la ventana, a su resolución real y escalados al rectángulo de 480x272 (`ui/overlay.cpp`); el HLE
   (`hle_dialog.cpp`) sigue la máquina de estados y las opciones de PPSSPP. Mientras están abiertos, el
   juego no recibe los botones, ni tampoco la pulsación que los cierra.
+- **SAS:** `KeyOn` sobre una voz que sigue sonando no la reinicia (ni `KeyOff` sobre una apagada), como en
+  la PSP. El juego repite `KeyOn` de los sonidos en bucle (roces, chirridos); reiniciarlos los cortaba.
 - **Partidas** (`sceUtilitySavedata`): el autoguardado y la carga al arrancar usan los modos automáticos
   (AUTOSAVE/AUTOLOAD/SIZES), que en la PSP no muestran nada y terminan al momento. *Opciones → Guardar/Cargar*
   usa SAVE y LOAD, que sí abren la pantalla del sistema: confirmación (sobrescribir con «No» por defecto),
