@@ -4,10 +4,11 @@
 Uso: python3 tools/setup.py --iso "Disney-Pixar Cars (Spain).iso" [-j N]
 
 1. Prepara las dependencias en third_party/ (versiones fijadas y comprobadas):
-   - rabbitizer (desensamblador MIPS/Allegrex, wheel de PyPI)
+   - rabbitizer (desensamblador MIPS/Allegrex): el instalado con pip o, en Linux, el wheel de PyPI
    - pspdecrypt (descifrado del EBOOT; se compila con make, requiere zlib y OpenSSL)
 2. Extrae PSP_GAME/SYSDIR/EBOOT.BIN de la ISO y comprueba que es la versión soportada.
-3. Lo descifra, lo recompila a C (build/gen) y compila el runtime (build/cars).
+3. Lo descifra, lo recompila a C (build/gen) y compila el runtime (build/cars): con CMake+Ninja
+   si están disponibles (Linux y Windows/MSYS2) y si no con make.
 
 Nada del juego sale de la máquina del usuario ni entra en el repositorio.
 """
@@ -15,6 +16,7 @@ import argparse
 import hashlib
 import io
 import os
+import shutil
 import struct
 import subprocess
 import sys
@@ -53,6 +55,13 @@ def run(cmd, **kw):
 def ensure_rabbitizer():
     if (THIRD / "pylib" / "rabbitizer").exists():
         return
+    try:
+        import rabbitizer  # noqa: F401  (instalado con pip, p. ej. en MSYS2)
+        return
+    except ImportError:
+        pass
+    if sys.platform != "linux":
+        sys.exit("falta rabbitizer: instálalo con  python -m pip install rabbitizer==1.16.2")
     step("Descargando rabbitizer")
     data = urllib.request.urlopen(RABBITIZER_URL).read()
     if sha256(data) != RABBITIZER_SHA256:
@@ -61,7 +70,7 @@ def ensure_rabbitizer():
 
 
 def ensure_pspdecrypt(jobs):
-    tool = THIRD / "pspdecrypt" / "pspdecrypt"
+    tool = THIRD / "pspdecrypt" / ("pspdecrypt.exe" if os.name == "nt" else "pspdecrypt")
     if tool.exists():
         return tool
     step("Compilando pspdecrypt")
@@ -128,9 +137,14 @@ def main():
          ROOT / f"tools/recomp/games/{GAME}.funcs.csv", "--out", BUILD / "gen"])
 
     step("Compilando el runtime")
-    run(["make", "-C", ROOT / "runtime", f"-j{args.j}"])
+    if shutil.which("cmake") and shutil.which("ninja"):
+        run(["cmake", "-S", ROOT, "-B", BUILD / "cmake", "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release"])
+        run(["cmake", "--build", BUILD / "cmake", "-j", str(args.j)])
+    else:
+        run(["make", "-C", ROOT / "runtime", f"-j{args.j}"])
 
-    print(f"\nListo. Para jugar:\n  {BUILD / 'cars'} --iso \"{args.iso}\"")
+    exe = BUILD / ("cars.exe" if os.name == "nt" else "cars")
+    print(f"\nListo. Para jugar:\n  {exe} --iso \"{args.iso}\"")
 
 
 if __name__ == "__main__":

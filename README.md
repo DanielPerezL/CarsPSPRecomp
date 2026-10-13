@@ -23,7 +23,7 @@ CPU.
 | Sustitución de texturas + reescalado con IA | ✅ |
 | Multijugador ad hoc | ❌ (la red se inicializa, nunca hay rivales) |
 | Diálogos del sistema con interfaz | ❌ (se responden solos) |
-| Windows | 🚧 |
+| Windows (MSYS2/MinGW-w64) | 🚧 preparado, pendiente de probar |
 
 ## Requisitos (Linux)
 
@@ -34,12 +34,24 @@ sudo apt install build-essential python3 git zlib1g-dev libssl-dev \
 
 GPU con OpenGL 3.3 o superior.
 
+## Requisitos (Windows 10/11)
+
+Con [MSYS2](https://www.msys2.org/), en la consola **MSYS2 MINGW64**:
+
+```bash
+pacman -S git make mingw-w64-x86_64-{gcc,cmake,ninja,pkgconf,SDL2,ffmpeg,zlib,openssl,python,python-pip}
+python -m pip install rabbitizer==1.16.2
+```
+
 ## Instalación
 
 ```bash
 python3 tools/setup.py --iso "Disney-Pixar Cars (Spain).iso"
 build/cars --iso "Disney-Pixar Cars (Spain).iso"
 ```
+
+En Windows el ejecutable es `build/cars.exe` y necesita las DLL de SDL2 y FFmpeg de MSYS2
+(`/mingw64/bin`) en el `PATH` o junto al ejecutable.
 
 `setup.py` descarga y compila las herramientas necesarias (versiones fijadas), extrae y descifra el
 ejecutable de tu ISO, comprueba que es la versión soportada, lo recompila y compila el runtime.
