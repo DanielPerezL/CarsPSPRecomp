@@ -1,149 +1,160 @@
-# Cars (PSP) — port nativo para PC
+# Cars (PSP) — native PC port
 
-Recompilación estática de *Disney·Pixar Cars* para PSP (ULES00324, versión española) a un ejecutable
-nativo de PC, con resolución libre, fotogramas interpolados por encima de 120 fps y texturas
-sustituibles.
+A static recompilation of *Disney·Pixar Cars* for the PSP (ULES00324, Spanish release) into a native PC
+executable, with arbitrary internal resolution, interpolated frames above 120 fps and replaceable
+textures.
 
-El ejecutable del juego se traduce instrucción a instrucción a C y se enlaza con un runtime propio que
-sustituye al sistema de la PSP (HLE). La lógica, la física y la IA son las originales, sin emulación de
-CPU.
+The game's executable is translated instruction by instruction into C and linked against a custom
+runtime that replaces the PSP's operating system (HLE). Game logic, physics and AI are the original
+ones, with no CPU emulation.
 
-> **Necesitas tu propia copia del juego.** Este repositorio no contiene nada de Cars: ni la ISO, ni el
-> código recompilado, ni sus gráficos o sonidos. Todo se genera en tu máquina a partir de tu ISO.
+> **You need your own copy of the game.** This repository contains nothing from Cars: no ISO, no
+> recompiled code, no graphics or sounds. Everything is generated on your machine from your ISO.
 
-## Estado
+## Status
 
 | | |
 |---|---|
-| Arranque, menús, partidas guardadas | ✅ |
-| Carreras (física Havok, IA, HUD) | ✅ |
-| Gráficos a 480x272 × N (por defecto 1920x1088) | ✅ |
-| Fotogramas interpolados (lógica a 30, presentación a la frecuencia del monitor) | ✅ |
-| Música (ATRAC3+), efectos (SAS) y vídeos (PSMF) | ✅ |
-| Exportación y sustitución de texturas (recarga en caliente con F5) | ✅ |
-| Multijugador ad hoc | ❌ (la red se inicializa, nunca hay rivales) |
-| Diálogos del sistema y pantalla de Guardar/Cargar (mando, teclado o ratón) | ✅ |
-| Windows 10/11 (compilado desde Linux con MinGW-w64; probado con Wine) | ✅ |
+| Boot, menus, save games | ✅ |
+| Races (Havok physics, AI, HUD) | ✅ |
+| Graphics at 480x272 × N (1920x1088 by default) | ✅ |
+| Interpolated frames (logic at 30 fps, presentation at the monitor's refresh rate) | ✅ |
+| Music (ATRAC3+), sound effects (SAS) and videos (PSMF) | ✅ |
+| Texture export and replacement (hot reload with F5) | ✅ |
+| Ad hoc multiplayer | ❌ (networking initialises, but no opponents ever show up) |
+| System dialogs and Save/Load screen (gamepad, keyboard or mouse) | ✅ |
+| Windows 10/11 (cross-compiled from Linux with MinGW-w64; tested on Windows and Wine) | ✅ |
 
-## Requisitos (Linux)
+## Requirements (Linux)
 
 ```bash
 sudo apt install build-essential python3 git zlib1g-dev libssl-dev \
                  libsdl2-dev libavcodec-dev libavutil-dev
 ```
 
-GPU con OpenGL 3.3 o superior.
+A GPU with OpenGL 3.3 or later.
 
-## Windows 10/11 compilado desde Linux
+## Windows 10/11 build from Linux
 
 ```bash
 sudo apt install mingw-w64 cmake ninja-build pkg-config curl unzip zip
-python3 tools/setup.py --iso "Disney-Pixar Cars (Spain).iso"   # genera build/gen
+python3 tools/setup.py --iso "Disney-Pixar Cars (Spain).iso"   # generates build/gen
 tools/build_windows.sh                                         # → build/windows/Cars.zip
 ```
 
-`build_windows.sh` descarga SDL2 y FFmpeg para Windows (versiones fijadas y verificadas por SHA-256),
-compila con MinGW-w64 y empaqueta el ejecutable, sus DLL y la imagen del juego. En Windows basta con
-descomprimir, copiar la ISO a la carpeta y abrir `cars.exe` (busca la `.iso` de su carpeta; los errores
-salen en un cuadro de diálogo y el registro en `cars.log`). El paquete lleva el código del juego
-recompilado: es solo para uso propio, no lo compartas.
+`build_windows.sh` downloads SDL2 and FFmpeg for Windows (pinned versions, verified by SHA-256),
+compiles with MinGW-w64 and packages the executable, its DLLs and the game image. On Windows, just
+unzip it, copy the ISO into the folder and run `cars.exe` (it looks for the `.iso` in its own folder;
+errors are shown in a message box and the log goes to `cars.log`). The package contains the game's
+recompiled code: it is for personal use only, do not share it.
 
-## Requisitos (compilar en Windows 10/11)
+## Requirements (building on Windows 10/11)
 
-Con [MSYS2](https://www.msys2.org/), en la consola **MSYS2 MINGW64**:
+With [MSYS2](https://www.msys2.org/), in the **MSYS2 MINGW64** shell:
 
 ```bash
 pacman -S git make mingw-w64-x86_64-{gcc,cmake,ninja,pkgconf,SDL2,ffmpeg,zlib,openssl,python,python-pip}
 python -m pip install rabbitizer==1.16.2
 ```
 
-## Instalación
+## Installation
 
 ```bash
 python3 tools/setup.py --iso "Disney-Pixar Cars (Spain).iso"
 build/cars --iso "Disney-Pixar Cars (Spain).iso"
 ```
 
-En Windows el ejecutable es `build/cars.exe` y necesita las DLL de SDL2 y FFmpeg de MSYS2
-(`/mingw64/bin`) en el `PATH` o junto al ejecutable.
+On Windows the executable is `build/cars.exe` and it needs the SDL2 and FFmpeg DLLs from MSYS2
+(`/mingw64/bin`) on the `PATH` or next to the executable.
 
-`setup.py` descarga y compila las herramientas necesarias (versiones fijadas), extrae y descifra el
-ejecutable de tu ISO, comprueba que es la versión soportada, lo recompila y compila el runtime.
+`setup.py` downloads and builds the required tools (pinned versions), extracts and decrypts the
+executable from your ISO, checks that it is the supported version, recompiles it and builds the runtime.
 
-## Controles
+## Controls
 
-| PSP | Teclado | Mando |
+| PSP | Keyboard | Gamepad |
 |---|---|---|
-| Cruceta | Flechas | Cruceta |
-| Stick | I J K L | Stick izquierdo |
+| D-pad | Arrow keys | D-pad |
+| Analog stick | I J K L | Left stick |
 | ✕ ○ □ △ | Z X A S | A B X Y |
-| L / R | Q / W | LB / RB o gatillos |
-| Start / Select | Intro / Retroceso | Start / Back |
+| L / R | Q / W | LB / RB or triggers |
+| Start / Select | Enter / Backspace | Start / Back |
 
-F11 alterna la pantalla completa y F5 recarga las texturas propias. En los diálogos del sistema también valen el ratón, Intro y Escape.
+F11 toggles fullscreen and F5 reloads custom textures. System dialogs also accept the mouse, Enter and
+Escape.
 
-## Opciones
+## Options
 
 ```
---scale N            resolución interna 480x272 × N (por defecto 4)
---fps N              fotogramas presentados por segundo (por defecto, los del monitor)
---no-interpolation   30 fps como en la PSP
---fullscreen         pantalla completa
---textures DIR       texturas de sustitución <hash>.png (por defecto textures/)
---dump-textures DIR  vuelca las texturas originales para editarlas
---ui-font FICHERO    fuente TTF de los diálogos (por defecto Noto Sans, DejaVu Sans o Segoe UI)
+--scale N            internal resolution 480x272 × N (default 4)
+--fps N              presented frames per second (default: the monitor's refresh rate)
+--no-interpolation   30 fps, as on the PSP
+--fullscreen         fullscreen
+--textures DIR       replacement textures <hash>.png (default textures/)
+--dump-textures DIR  dump the original textures for editing
+--ui-font FILE       TTF font for dialogs (default Noto Sans, DejaVu Sans or Segoe UI)
 ```
 
-## Texturas propias
+## Custom textures
 
-Puedes exportar todas las texturas del juego de golpe, editarlas y ver los cambios en el juego sin
-reiniciarlo.
+You can export every texture in the game at once, edit them and see the changes in game without
+restarting it.
 
 ```bash
-python3 tools/textures/export.py --iso juego.iso --out texdump   # 1. ~1.860 texturas en unos segundos
-mkdir -p textures && cp texdump/<hash>.png textures/            # 2. copia las que quieras cambiar y edítalas
-build/cars --iso juego.iso                                      # 3. textures/ se carga automáticamente
+python3 tools/textures/export.py --iso game.iso --out texdump   # 1. ~1,860 textures in a few seconds
+mkdir -p textures && cp texdump/<hash>.png textures/           # 2. copy the ones you want to change and edit them
+build/cars --iso game.iso                                      # 3. textures/ is loaded automatically
 ```
 
-- `export.py` lee la ISO directamente: las texturas de RenderWare de los `.DFF` y los PNG de `USRDIR`.
-  `texdump/index.csv` dice de qué fichero sale cada una y su nombre original (p. ej. las de un coche están
-  en `CARSKIN_<COCHE>_<VARIANTE>.DFF`).
-- Cada textura se llama por el hash de su imagen (`<hash>.png`), el mismo con el que el juego la busca.
-- La versión editada puede tener el mismo tamaño o más resolución, siempre que mantenga la proporción
-  (128x64 → 512x256). El canal alfa se respeta.
-- **F5** recarga la carpeta `textures/` en caliente: edita, guarda y pulsa F5 para verlo en el juego.
-- Unas pocas texturas las genera el juego mientras corre (no están en los ficheros). Para esas,
-  `build/cars --iso juego.iso --dump-textures texdump` guarda, jugando, las que aparezcan en pantalla.
+- `export.py` reads the ISO directly: the RenderWare textures inside the `.DFF` files and the PNGs in
+  `USRDIR`. `texdump/index.csv` tells you which file each one comes from and its original name (e.g. a
+  car's textures are in `CARSKIN_<CAR>_<VARIANT>.DFF`).
+- Each texture is named after the hash of its image (`<hash>.png`), the same hash the game looks it up by.
+- The edited version may have the same size or a higher resolution, as long as it keeps the aspect
+  ratio (128x64 → 512x256). The alpha channel is honoured.
+- **F5** hot-reloads the `textures/` folder: edit, save and press F5 to see it in game.
+- A few textures are generated by the game at runtime (they are not in any file). For those,
+  `build/cars --iso game.iso --dump-textures texdump` saves the ones that appear on screen while you play.
 
-## Contribuir
+## Contributing
 
-El repositorio no puede contener nada del juego (ISO, ejecutables, assets, volcados, capturas ni
-conversiones). Activa la comprobación automática en cada commit:
+The repository must not contain anything from the game (ISO, executables, assets, dumps, screenshots
+or conversions). Enable the automatic check on every commit:
 
 ```bash
 git config core.hooksPath .githooks
-python3 tools/check_repo.py --history   # revisa todo el historial antes de publicar
+python3 tools/check_repo.py --history   # checks the whole history before publishing
 ```
 
-## Documentación
+## Documentation
 
-- [docs/RECOMPILACION.md](docs/RECOMPILACION.md): arquitectura del recompilador y del runtime.
-- `tools/`: herramientas de análisis (extracción de la ISO, streams de RenderWare Studio, conversión de
-  modelos a glTF, bancos de sonido) y scripts de Ghidra.
+- [docs/RECOMPILATION.md](docs/RECOMPILATION.md): architecture of the recompiler and the runtime.
+- `tools/`: analysis tools (ISO extraction, RenderWare Studio streams, model conversion to glTF, sound
+  banks) and Ghidra scripts.
 
-## Créditos
+## Credits
 
-- [PPSSPP](https://github.com/hrydgard/ppsspp) (GPL-2.0+): referencia de la semántica de la VFPU, el SAS,
-  Savedata, sceMpeg y las tablas de NIDs.
-- [rabbitizer](https://github.com/Decompollaborate/rabbitizer) (MIT): desensamblador Allegrex.
-- [pspdecrypt](https://github.com/John-K/pspdecrypt) (GPL-3.0): descifrado del ejecutable.
-- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) y [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex): análisis.
+- [PPSSPP](https://github.com/hrydgard/ppsspp) (GPL-2.0+): reference for the semantics of the VFPU, SAS,
+  Savedata, sceMpeg and the NID tables.
+- [rabbitizer](https://github.com/Decompollaborate/rabbitizer) (MIT): Allegrex disassembler.
+- [pspdecrypt](https://github.com/John-K/pspdecrypt) (GPL-3.0): executable decryption.
+- [Ghidra](https://github.com/NationalSecurityAgency/ghidra) and [ghidra-allegrex](https://github.com/kotcrab/ghidra-allegrex): analysis.
 - [SDL2](https://www.libsdl.org/), [FFmpeg](https://ffmpeg.org/), [stb](https://github.com/nothings/stb),
   [Dear ImGui](https://github.com/ocornut/imgui) (MIT).
-- Inspirado en [N64Recomp](https://github.com/N64Recomp/N64Recomp) y RT64.
+- Inspired by [N64Recomp](https://github.com/N64Recomp/N64Recomp) and RT64.
 
-*Cars* es © Disney/Pixar. Este proyecto no está afiliado a Disney, Pixar, THQ ni Sony.
+*Cars* is © Disney/Pixar. This project is not affiliated with Disney, Pixar, THQ or Sony.
 
-## Licencia
+## Built with Claude
 
-GPL-3.0-or-later. Ver [LICENSE](LICENSE).
+I developed this port together with [Claude](https://www.anthropic.com/claude) (Claude Opus 5.5),
+Anthropic's AI model, through [Claude Code](https://claude.com/claude-code). We worked side by side on
+every stage of the project, from analysing the executable with Ghidra to the recompiler, the HLE
+runtime, the renderer, audio and video, the Windows build and this documentation. I led the technical
+work: shaping the architecture, making the design decisions, debugging the game hands-on on Linux and
+Windows to track down what was broken and why, and reviewing and refining every change. Claude wrote
+much of the code and documentation along the way.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
